@@ -1,0 +1,25 @@
+From 49e3d3fa4752971deefe3af9c0608fe461a32df9 Mon Sep 17 00:00:00 2001
+From: Sahil Bakshi <sahilbakshi2001@gmail.com>
+Date: Thu, 5 Nov 2026 17:44:22 +0530
+Subject: [PATCH] devices: add device id for Qualcomm Atheros IPQ9574 Add
+ device id for Qualcomm Atheros IPQ9574 Wi-Fi
+
+Signed-off-by: Sahil Bakshi <sahilbakshi2001@gmail.com>
+Link: https://github.com/openwrt/iwinfo/pull/51
+Signed-off-by: Robert Marko <robimarko@gmail.com>
+---
+ devices.txt | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/devices.txt b/devices.txt
+index 1673f8f..80f5973 100644
+--- a/devices.txt
++++ b/devices.txt
+@@ -273,6 +273,7 @@
+ "qcom,ipq5018-wifi"     0      0  "Qualcomm Atheros" "IPQ5018"
+ "qcom,ipq6018-wifi"     0      0  "Qualcomm Atheros" "IPQ6018"
+ "qcom,ipq8074-wifi"     0      0  "Qualcomm Atheros" "IPQ8074"
++"qcom,ipq9574-wifi"     0      0  "Qualcomm Atheros" "IPQ9574"
+ "qcom,qcn6122-wifi"     0      0  "Qualcomm Atheros" "QCN6102/QCN6122"
+ "mediatek,mt7622-wmac"  0      0  "MediaTek" "MT7622"
+ "mediatek,mt7628-wmac"  0      0  "MediaTek" "MT7628"
