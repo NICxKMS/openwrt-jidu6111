@@ -71,7 +71,7 @@ apk --repositories-file /dev/null -X http://BUILD_HOST_LAN_IP:8000/packages.adb 
 
 You can also copy a selected batch of APKs and their dependencies to the router and install the files locally. Compare the output of `apk --repositories-file /dev/null query --from installed --fields name,version kernel` on the router with the kernel package in the firmware manifest. The kernel package's full version is the compatibility check, including the identifier after `6.18.60~`.
 
-The `router` branch contains the JIDU6111 sysupgrade image for the installed firmware and its full signed APK repository. Download it with a GitHub account that can access the repository, then serve its package directory from a computer on your LAN.
+The [`router` branch](https://github.com/NICxKMS/openwrt-jidu6111/tree/router) contains the JIDU6111 sysupgrade image and its full signed APK repository. Clone it and serve its package directory from a computer on your LAN.
 
 ```sh
 git clone --single-branch --branch router https://github.com/NICxKMS/openwrt-jidu6111.git jidu6111-router
@@ -114,3 +114,12 @@ Outbound traffic uses double NAT. For any future inbound port forward, both rout
 - The [19 November 2026 daily](https://github.com/SahilB69/jidu6j11-openwrt/releases/tag/snapshot-20261119) uses [OpenWrt `ecd9120f0451`](https://github.com/openwrt/openwrt/commit/ecd9120f0451920fd277c717fa06cc358d553409) and [JIDU6J11 board support `5b52c230e955`](https://github.com/SahilB69/openwrt/commit/5b52c230e955eda0519db9a0961faf869bb66cdf). This build uses those revisions and matches the daily's [LuCI revision `6393a54`](https://github.com/openwrt/luci/commit/6393a54375c42772a6362352daa53272360ed389). The other feeds use the revisions in `sources/feeds.conf`.
 - [IPQ9574 and QCN9074 board data](https://github.com/openwrt/firmware_qca-wireless/commit/be12dccc79b79799192206514b7ef2dbc222d482) and [iwinfo IPQ9574 device ID](https://github.com/openwrt/iwinfo/commit/49e3d3fa4752971deefe3af9c0608fe461a32df9).
 - The build includes the OpenWrt ath11k fixes for suspend/resume interrupts, short management frames, and IRQ cleanup, plus the community per-ring RX memory, interrupt lifecycle, and ring sizing changes. The per-ring patch uses the OpenWrt recovery interrupt sequence. The firmware honors the configured Wi-Fi country.
+
+## Credits
+
+- **Sahil Bakshi (SahilB69)** maintains the community daily builds, developed the JIDU6J11 OpenWrt port and RX ring sizing patch, and submitted the IPQ9574 device ID to iwinfo. Robert Marko signed off the iwinfo change. [Community build](https://github.com/SahilB69/jidu6j11-openwrt) · [OpenWrt device support](https://github.com/openwrt/openwrt/pull/26498) · [iwinfo change](https://github.com/openwrt/iwinfo/pull/51)
+- **AliLostInTheDark** packaged the model-specific IPQ9574 and QCN9074 board data used here. [Board-data contribution](https://github.com/openwrt/firmware_qca-wireless/pull/193)
+- **Mark Ruvald Pedersen (eisbaw)** authored the ath11k interrupt lifecycle and per-ring RX memory patches. **Baochen Qiang, Jiale Yao, and ZhaoJinming** authored the upstream ath11k fixes for suspend/resume interrupt handling, short management frames, and interrupt setup cleanup. [RX memory patch series](https://github.com/openwrt/openwrt/pull/24254) · [Upstream driver patches](https://github.com/openwrt/openwrt/tree/ecd9120f0451920fd277c717fa06cc358d553409/package/kernel/mac80211/patches/ath11k)
+- The firmware and packages build on the work of the **OpenWrt, Linux, LuCI, and APK Tools** contributors, the maintainers of the individual packages, and the JIDU6J11 community testers. [OpenWrt](https://github.com/openwrt/openwrt) · [Linux](https://kernel.org/) · [LuCI](https://github.com/openwrt/luci) · [APK Tools](https://gitlab.alpinelinux.org/alpine/apk-tools) · [Package feed revisions](sources/feeds.conf)
+
+This is an independent community build for the JIDU6111. OpenWrt is licensed under [GPL-2.0-only](sources/licenses/GPL-2.0.txt). Individual packages and firmware retain their upstream licenses. The upstream [IPQ9574 license](sources/licenses/IPQ9574-firmware.txt), [QCN9074 license](sources/licenses/QCN9074-firmware.txt), and [QCN9074 notices](sources/licenses/QCN9074-notices.txt) are included here.
