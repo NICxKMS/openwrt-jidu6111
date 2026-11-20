@@ -1,0 +1,45 @@
+--- a/utils/collectd/Makefile
++++ b/utils/collectd/Makefile
+@@ -9,7 +9,7 @@
+ 
+ PKG_NAME:=collectd
+ PKG_VERSION:=5.12.0
+-PKG_RELEASE:=59
++PKG_RELEASE:=60
+ 
+ PKG_SOURCE:=$(PKG_NAME)-$(PKG_VERSION).tar.bz2
+ PKG_SOURCE_URL:=https://collectd.org/files/ \
+--- /dev/null
++++ b/utils/collectd/patches/101-share-librrd-lock.patch
+@@ -0,0 +1,31 @@
++Subject: [PATCH] collectd: share the librrd lock between creation and updates
++
++The non-thread-safe RRD library uses global getopt state. Independent
++locks in rrdcreate and rrdtool allow creation to race with updates,
++causing startup errors such as "Not enough arguments" and missing files.
++Serialize these calls through the mutex defined in rrdcreate.
++
++--- a/src/utils/rrdcreate/rrdcreate.c
+++++ b/src/utils/rrdcreate/rrdcreate.c
++@@ -58,7 +58,8 @@
++ static int rra_types_num = STATIC_ARRAY_SIZE(rra_types);
++ 
++ #if !defined(HAVE_THREADSAFE_LIBRRD)
++-static pthread_mutex_t librrd_lock = PTHREAD_MUTEX_INITIALIZER;
+++/* Shared with the rrdtool plugin to serialize all non-thread-safe RRD calls. */
+++pthread_mutex_t librrd_lock = PTHREAD_MUTEX_INITIALIZER;
++ #endif
++ 
++ static async_create_file_t *async_creation_list;
++--- a/src/rrdtool.c
+++++ b/src/rrdtool.c
++@@ -104,7 +104,8 @@
++ static pthread_cond_t queue_cond = PTHREAD_COND_INITIALIZER;
++ 
++ #if !HAVE_THREADSAFE_LIBRRD
++-static pthread_mutex_t librrd_lock = PTHREAD_MUTEX_INITIALIZER;
+++/* Defined by utils/rrdcreate, also used by synchronous and async creation. */
+++extern pthread_mutex_t librrd_lock;
++ #endif
++ 
++ static int do_shutdown;

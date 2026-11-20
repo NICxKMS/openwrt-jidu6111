@@ -111,6 +111,8 @@ If both routers perform NAT, outbound IPv4 traffic uses double NAT. Inbound port
 
 ## Source revisions
 
+- The local collectd feed patch shares the RRD library lock between file creation and updates. It fixes startup graph errors such as “Not enough arguments” and publishes `collectd-mod-rrdtool` as `5.12.0-r60`. `make feeds` and the wrapper build checks apply this patch automatically.
+
 - The [19 November 2026 daily](https://github.com/SahilB69/jidu6j11-openwrt/releases/tag/snapshot-20261119) uses [OpenWrt `ecd9120f0451`](https://github.com/openwrt/openwrt/commit/ecd9120f0451920fd277c717fa06cc358d553409) and [JIDU6J11 board support `5b52c230e955`](https://github.com/SahilB69/openwrt/commit/5b52c230e955eda0519db9a0961faf869bb66cdf). This build uses those revisions and matches the daily's [LuCI revision `6393a54`](https://github.com/openwrt/luci/commit/6393a54375c42772a6362352daa53272360ed389). The other feeds use the revisions in `sources/feeds.conf`.
 - [IPQ9574 and QCN9074 board data](https://github.com/openwrt/firmware_qca-wireless/commit/be12dccc79b79799192206514b7ef2dbc222d482) and [iwinfo IPQ9574 device ID](https://github.com/openwrt/iwinfo/commit/49e3d3fa4752971deefe3af9c0608fe461a32df9).
 - The build includes the OpenWrt ath11k fixes for suspend/resume interrupts, short management frames, and IRQ cleanup, plus the community per-ring RX memory, interrupt lifecycle, and ring sizing changes. The per-ring patch uses the OpenWrt recovery interrupt sequence. The firmware honors the configured Wi-Fi country.

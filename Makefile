@@ -34,7 +34,9 @@ source:
 	bash scripts/bootstrap-source.sh
 
 feeds:
-	cd openwrt && ./scripts/feeds update -a && ./scripts/feeds install -a
+	cd openwrt && ./scripts/feeds update -a
+	bash scripts/apply-feed-patches.sh
+	cd openwrt && ./scripts/feeds install -a
 
 configure:
 	$(MAKE) -C openwrt scripts/config/conf prepare-tmpinfo
@@ -59,6 +61,7 @@ save-config: check
 	@mv config/jidu6111.diffconfig.new config/jidu6111.diffconfig
 
 check:
+	@bash scripts/apply-feed-patches.sh
 	@grep -Eq '^KERNEL_PATCHVER[[:space:]]*:=[[:space:]]*6\.18$$' openwrt/target/linux/qualcommbe/Makefile || { echo 'Expected the qualcommbe Linux 6.18 target.' >&2; exit 1; }
 	@grep -Fqx '$(PROFILE)' openwrt/.config || { echo 'Run make configure to select JIDU6111.' >&2; exit 1; }
 
