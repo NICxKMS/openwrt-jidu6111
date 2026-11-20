@@ -2,7 +2,16 @@
 
 This branch contains the JioRouter AX6000 **JIDU6111** sysupgrade image for OpenWrt `r0+38470-c3af7ee2f2` and its matching signed APK repository.
 
-[Build source on `main`](https://github.com/NICxKMS/openwrt-jidu6111/tree/d2e7f9259b31074846f04d6de1970ac2b9600d1c) is pinned to commit `d2e7f9259b31074846f04d6de1970ac2b9600d1c`. It includes the OpenWrt and feed revisions, local patches, board data, and build profile for these files.
+The firmware image is built from [main commit `d2e7f9259b31074846f04d6de1970ac2b9600d1c`](https://github.com/NICxKMS/openwrt-jidu6111/tree/d2e7f9259b31074846f04d6de1970ac2b9600d1c). Its manifest records the packages built into that image.
+
+The signed repository also includes `collectd-mod-rrdtool` **5.12.0-r60**, built from [main commit `738a13719aeba1853f693ddad84e176a74b3fb86`](https://github.com/NICxKMS/openwrt-jidu6111/tree/738a13719aeba1853f693ddad84e176a74b3fb86). This update shares the RRD library lock between file creation and updates to fix startup graph errors. It passed a package upgrade and reboot check on the JIDU6111.
+
+To upgrade an existing installation using this signed repository, run on the router and restart graph collection afterward.
+
+```sh
+apk --repositories-file /dev/null -X https://raw.githubusercontent.com/NICxKMS/openwrt-jidu6111/router/packages/packages.adb add --upgrade collectd-mod-rrdtool
+/etc/init.d/collectd restart
+```
 
 - [Firmware manifest](openwrt-qualcommbe-ipq95xx-jiorouter_ax6000-jidu6111.manifest)
 - [SHA-256 checksums](sha256sums)
