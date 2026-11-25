@@ -1,0 +1,245 @@
+#!/bin/sh
+. "${NICX_LIB:-/usr/lib/nicx-telemetry}/common.sh"
+. "${NICX_JSHN:-/usr/share/libubox/jshn.sh}"
+
+reply_error() { json_init;json_add_boolean ok 0;json_add_string error "$1";json_dump; }
+reply_ok() { json_init;json_add_boolean ok 1;json_dump; }
+private_work() {
+    init_state_dirs || return 1
+    STATE=$(mktemp -d "$STATE/rpc.XXXXXX") || return 1
+    trap 'rm -rf "$STATE";flock -u 8' EXIT
+    trap 'exit 1' INT TERM
+}
+read_input() {
+    init_state_dirs || return 1
+    IFS= read -r input
+    [ "${#input}" -le 8192 ] || return 1
+    parse_json "$input"
+}
+service_script=${NICX_SERVICE_SCRIPT:-/etc/init.d/nicx-telemetry}
+credential_lock() {
+    exec 8>> "$1/credential.lock"
+    flock -n 8 || return 1
+    trap 'flock -u 8' EXIT
+}
+stage_token() {
+    credential_tmp=$(mktemp "$CONFIG_DIR/token.XXXXXX") || return 1
+    if [ -n "$1" ] && [ -n "$2" ];then
+        printf '%s\n%s\n%s\n' "$token" "$1" "$2" > "$credential_tmp" || return 1
+    else
+        printf '%s\n' "$token" > "$credential_tmp" || return 1
+    fi
+    chmod 600 "$credential_tmp"
+}
+publish_token() {
+    [ ! -d "$credential" ] && mv -f "$credential_tmp" "$credential"
+}
+enroll_cleanup() {
+    [ -z "$credential_tmp" ] || rm -f "$credential_tmp"
+    [ -z "$previous_token" ] || rm -f "$previous_token"
+    [ -z "$salt_tmp" ] || rm -f "$salt_tmp"
+    rm -rf "$STATE"
+    flock -u 8
+}
+ensure_privacy_salt() {
+    [ ! -e "$CONFIG_DIR/privacy-salt" ] || return 0
+    salt_tmp=$(mktemp "$CONFIG_DIR/salt.XXXXXX") || return 1
+    dd if=/dev/urandom of="$STATE/salt-source" bs=32 count=1 2>/dev/null &&
+        [ "$(wc -c < "$STATE/salt-source")" -eq 32 ] || return 1
+    salt_hash=$(sha256sum < "$STATE/salt-source") || return 1
+    printf '%s\n' "${salt_hash%% *}" > "$salt_tmp" && chmod 600 "$salt_tmp" &&
+        mv "$salt_tmp" "$CONFIG_DIR/privacy-salt"
+}
+lock_agent_for_enrollment() {
+    exec 9>> "$root_state/agent.lock"
+    if ! agent_owner_alive "$root_state" && flock -n 9;then return 0;fi
+    timeout 8 "$service_script" stop 8>&- 9>&- >/dev/null 2>&1 || return 1
+    for attempt in 0 1 2 3 4 5 6 7 8 9 10;do
+        if ! agent_owner_alive "$root_state" && flock -n 9;then return 0;fi
+        sleep 1
+    done
+    return 1
+}
+start_after_enrollment() {
+    exec 9>&-
+    [ "$telemetry_enabled" != 1 ] || timeout 8 "$service_script" start 8>&- >/dev/null 2>&1
+}
+case "$1" in
+    list)
+        echo '{"status":{},"test":{},"restart":{},"set_token":{"token":""},"snapshot":{"kind":""},"enroll":{"endpoint":"","enrollment_token":"","name":""}}'
+        ;;
+    call)
+        case "$2" in
+            status)
+                if [ -r "$STATE/status.json" ] && agent_owner_alive "$STATE";then
+                    cat "$STATE/status.json";exit 0
+                fi
+                json_init;json_add_boolean running 0
+                read -r router_boot < /proc/sys/kernel/random/boot_id
+                json_add_string boot_id "$router_boot"
+                json_add_boolean enrolled "$([ -s "$credential" ] && echo 1 || echo 0)"
+                if [ -d "$STATE" ] && [ -s "$STATE/snapshot-status.json" ];then
+                    status_tmp=$(mktemp "$STATE/rpc-status.XXXXXX") || exit 1
+                    json_dump > "$status_tmp";attach_snapshot_status "$status_tmp";rm -f "$status_tmp"
+                else json_dump;fi
+                ;;
+            restart)
+                timeout 8 "$service_script" restart >/dev/null 2>&1
+                if [ "$?" -eq 0 ];then reply_ok;else reply_error restart_failed;fi
+                ;;
+            test)
+                init_state_dirs || { reply_error local_state_unavailable;exit 0; }
+                credential_lock "$STATE" || { reply_error credential_operation_in_progress;exit 0; }
+                load_config
+                valid_endpoint "$endpoint" || { reply_error invalid_https_origin;exit 0; }
+                private_work || { reply_error local_state_unavailable;exit 0; }
+                make_curl_config "$STATE/auth" || { reply_error credential_missing_or_unsafe_permissions;exit 0; }
+                code=$(https --request GET "$endpoint/api/v1/device/config")
+                result=$?
+                if [ "$result" -eq 0 ] && [ "$code" = 200 ];then reply_ok;else reply_error "connection_or_authentication_failed_$code";fi
+                ;;
+            set_token)
+                read_input || { reply_error invalid_input;exit 0; }
+                json_get_var token token
+                export -n token;json_cleanup
+                case "$token" in ''|*[!a-zA-Z0-9_-]*)reply_error invalid_device_credential;exit 0;;esac
+                [ "${#token}" -ge 43 ] && [ "${#token}" -le 128 ] || { reply_error invalid_device_credential;exit 0; }
+                [ -d "$CONFIG_DIR" ] && [ ! -L "$CONFIG_DIR" ] || { reply_error router_not_enrolled;exit 0; }
+                credential_lock "$STATE" || { reply_error credential_operation_in_progress;exit 0; }
+                trap '[ -z "$credential_tmp" ] || rm -f "$credential_tmp";flock -u 8' EXIT
+                load_config
+                if ! stage_token "$endpoint" "$device_id" || ! publish_token;then
+                    reply_error credential_write_failed;exit 0
+                fi
+                unset token input;json_cleanup
+                reply_ok
+                ;;
+            enroll)
+                read_input || { reply_error invalid_input;exit 0; }
+                json_get_vars endpoint enrollment_token name
+                valid_endpoint "$endpoint" || { reply_error invalid_https_origin;exit 0; }
+                case "$enrollment_token" in ''|*[!a-zA-Z0-9_-]*)reply_error invalid_enrollment_token;exit 0;;esac
+                [ "${#enrollment_token}" -ge 32 ] && [ "${#enrollment_token}" -le 128 ] && [ "${#name}" -ge 1 ] && [ "${#name}" -le 64 ] || { reply_error invalid_input;exit 0; }
+                root_state=$STATE
+                credential_lock "$root_state" || { reply_error credential_operation_in_progress;exit 0; }
+                private_work || { reply_error local_state_unavailable;exit 0; }
+                credential_tmp='';previous_token='';salt_tmp=''
+                trap enroll_cleanup EXIT
+                model=$(timeout 2 ubus call system board 2>/dev/null | head -c 8192 | jsonfilter -e '@.model' 2>/dev/null)
+                json_init;json_add_string enrollment_token "$enrollment_token";json_add_string name "$name"
+                if [ -n "$model" ] && [ "${#model}" -le 128 ];then json_add_string model "$model";fi
+                json_dump > "$STATE/request" || { reply_error local_state_unavailable;exit 0; }
+                json_cleanup;unset enrollment_token input
+                : > "$STATE/auth" || { reply_error local_state_unavailable;exit 0; }
+                code=$(https --request POST --data-binary "@$STATE/request" "$endpoint/api/v1/devices/enroll")
+                result=$?;rm -f "$STATE/request"
+                [ "$result" -eq 0 ] && { [ "$code" = 200 ] || [ "$code" = 201 ]; } || { reply_error enrollment_failed;exit 0; }
+                parse_json "$(cat "$STATE/response")" || { reply_error invalid_enrollment_response;exit 0; }
+                json_get_vars token device_id
+                export -n token;json_cleanup
+                valid_uuid "$device_id" || { reply_error invalid_device_id;exit 0; }
+                case "$token" in ''|*[!a-zA-Z0-9_-]*)reply_error invalid_device_credential;exit 0;;esac
+                [ "${#token}" -ge 43 ] && [ "${#token}" -le 128 ] || { reply_error invalid_device_credential;exit 0; }
+                [ ! -L "$CONFIG_DIR" ] || { reply_error unsafe_credential_directory;exit 0; }
+                if ! mkdir -p "$CONFIG_DIR" || ! chmod 700 "$CONFIG_DIR" ||
+                    ! stage_token "$endpoint" "$device_id" || ! ensure_privacy_salt;then
+                    reply_error enrollment_credential_write_failed;exit 0
+                fi
+                unset token
+                if [ -e "$credential" ] || [ -L "$credential" ];then
+                    if [ ! -f "$credential" ] || [ -L "$credential" ] ||
+                        ! previous_token=$(mktemp "$CONFIG_DIR/token.previous.XXXXXX") ||
+                        ! cp -p "$credential" "$previous_token";then
+                        reply_error enrollment_credential_write_failed;exit 0
+                    fi
+                fi
+                # Use a private UCI delta directory so failed sets are never visible to other readers.
+                if ! mkdir "$STATE/uci" ||
+                    ! uci -t "$STATE/uci" set "nicx-telemetry.main.endpoint=$endpoint" ||
+                    ! uci -t "$STATE/uci" set "nicx-telemetry.main.device_id=$device_id";then
+                    reply_error enrollment_config_write_failed;exit 0
+                fi
+                telemetry_enabled=$(uget enabled)
+                if ! lock_agent_for_enrollment;then
+                    start_after_enrollment
+                    reply_error enrollment_stop_failed;exit 0
+                fi
+                # Keep the agent stopped until the new credential and its configuration agree.
+                if ! publish_token;then
+                    start_after_enrollment
+                    reply_error enrollment_credential_write_failed;exit 0
+                fi
+                if ! uci -t "$STATE/uci" commit nicx-telemetry;then
+                    if [ -n "$previous_token" ];then
+                        mv -f "$previous_token" "$credential"
+                    else
+                        rm -f "$credential"
+                    fi
+                    if [ "$?" -ne 0 ];then
+                        # Keep the old credential available for recovery on rollback failure.
+                        previous_token=''
+                        reply_error enrollment_rollback_failed;exit 0
+                    fi
+                    start_after_enrollment
+                    reply_error enrollment_config_write_failed;exit 0
+                fi
+                restarted=0;restart_required=0
+                if start_after_enrollment;then
+                    [ "$telemetry_enabled" != 1 ] || restarted=1
+                else restart_required=1;fi
+                json_init;json_add_boolean ok 1;json_add_string device_id "$device_id"
+                json_add_boolean restarted "$restarted";json_add_boolean restart_required "$restart_required";json_dump
+                ;;
+            snapshot)
+                read_input || { reply_error invalid_input;exit 0; }
+                json_get_var kind kind
+                [ "$(uget diagnostics_enabled)" = 1 ] || { reply_error diagnostics_disabled;exit 0; }
+                cloud_diag=$(jsonfilter -i "$STATE/status.json" -e '@.cloud_diagnostics_enabled' 2>/dev/null)
+                case "$cloud_diag" in 1|true);;*)reply_error cloud_diagnostics_disabled;exit 0;;esac
+                if ! mkdir "$STATE/snapshot.lock" 2>/dev/null;then reply_error snapshot_in_progress;exit 0;fi
+                echo $$ > "$STATE/snapshot.lock/pid"
+                snapshot_tmp='';snapshot_source=''
+                trap 'rm -f "$STATE/snapshot.lock/pid" "$snapshot_tmp" "$snapshot_source";rmdir "$STATE/snapshot.lock" 2>/dev/null' EXIT
+                active_snapshot=$(jsonfilter -i "$STATE/snapshot-status.json" -e '@.state' 2>/dev/null)
+                case "$active_snapshot" in queued|uploading|retrying)reply_error snapshot_in_progress;exit 0;;esac
+                case "$kind" in memory)source_file="$STATE/detail.json";;network)source_file="$STATE/network.json";;wifi)source_file="$STATE/wifi.json";;packages)
+                    if command -v apk >/dev/null;then packages=$(timeout 3 apk info -v 2>/dev/null | head -c 8192)
+                    elif command -v opkg >/dev/null;then packages=$(timeout 3 opkg list-installed 2>/dev/null | head -c 8192)
+                    else reply_error package_inventory_unavailable;exit 0;fi
+                    json_init;json_add_string installed_packages "$packages";json_dump > "$STATE/packages.json"
+                    source_file="$STATE/packages.json";;*)reply_error unsupported_snapshot;exit 0;;esac
+                [ -r "$source_file" ] || { reply_error snapshot_not_yet_available;exit 0; }
+                # Read, size and validate one cache generation, even across refreshes.
+                snapshot_source=$(mktemp "$STATE/snapshot-source.XXXXXX") || { reply_error local_state_unavailable;exit 0; }
+                if ! head -c 12001 < "$source_file" > "$snapshot_source";then
+                    reply_error snapshot_not_yet_available;exit 0
+                fi
+                snapshot_size=$(wc -c < "$snapshot_source") || { reply_error local_state_unavailable;exit 0; }
+                [ "$snapshot_size" -le 12000 ] || { reply_error snapshot_too_large;exit 0; }
+                if ! jshn -R "$snapshot_source" >/dev/null 2>&1;then
+                    reply_error snapshot_not_yet_available;exit 0
+                fi
+                snapshot_tmp=$(mktemp "$STATE/snapshot.XXXXXX") || { reply_error local_state_unavailable;exit 0; }
+                read -r request_id < /proc/sys/kernel/random/uuid
+                if ! {
+                    printf '{"request_id":"%s","kind":"%s","snapshot":' "$request_id" "$kind" &&
+                        cat "$snapshot_source" && printf '}\n'
+                } > "$snapshot_tmp" || ! jshn -R "$snapshot_tmp" >/dev/null 2>&1;then
+                    reply_error snapshot_not_yet_available;exit 0
+                fi
+                snapshot_create "$request_id" "$kind" || { reply_error local_state_unavailable;exit 0; }
+                if [ -d "$STATE/snapshot" ] || ! mv "$snapshot_tmp" "$STATE/snapshot";then
+                    rm -f "$STATE/snapshot-status.json"
+                    reply_error local_state_unavailable;exit 0
+                fi
+                json_init;json_add_boolean ok 1;json_add_string request_id "$request_id";json_add_string kind "$kind";json_add_string state queued
+                read -r router_boot < /proc/sys/kernel/random/boot_id
+                json_add_string boot_id "$router_boot"
+                requested_uptime=$(jsonfilter -i "$STATE/snapshot-status.json" -e '@.requested_uptime_s' 2>/dev/null)
+                json_add_double requested_uptime_s "$requested_uptime";json_dump
+                ;;
+            *)reply_error unsupported_method;;
+        esac
+        ;;
+    *)exit 1;;
+esac
