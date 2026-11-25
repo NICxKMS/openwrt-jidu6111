@@ -28,6 +28,17 @@ export default defineConfig(({command, mode}) => {
   const plugins = [react(), tailwind()];
   return {
     plugins: command === 'build' ? [...plugins, dashboardHeaders(env.VITE_API_URL)] : plugins,
-    build: {target: 'es2022', sourcemap: false},
+    build: {
+      target: 'es2022',
+      sourcemap: false,
+      rolldownOptions: {
+        output: {
+          manualChunks(id) {
+            if (id.includes('@supabase/')) return 'supabase';
+            if (id.includes('react-dom') || id.includes('/react/')) return 'react';
+          },
+        },
+      },
+    },
   };
 });
