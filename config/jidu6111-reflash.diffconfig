@@ -1,0 +1,26 @@
+CONFIG_TARGET_MULTI_PROFILE=y
+CONFIG_TARGET_DEVICE_qualcommbe_ipq95xx_DEVICE_jiorouter_ax6000-jidu6111=y
+CONFIG_TARGET_DEVICE_qualcommbe_ipq95xx_DEVICE_jiorouter_ax6000-jidu6111-wcss-off=y
+
+# Use GCC 14 for eligible package LTO in both kernel build profiles.
+CONFIG_TOOLCHAINOPTS=y
+CONFIG_GCC_USE_VERSION_14=y
+CONFIG_USE_LTO=y
+
+# Enable pressure stalls, IRQ accounting, process PSS and slab counters.
+CONFIG_KERNEL_PSI=y
+CONFIG_KERNEL_PROC_PAGE_MONITOR=y
+CONFIG_KERNEL_IRQ_TIME_ACCOUNTING=y
+CONFIG_KERNEL_SLUB_DEBUG=y
+# CONFIG_KERNEL_SLUB_DEBUG_ON is not set
+
+# Include the telemetry service and preserve the legacy internet/system collectors during cutover.
+CONFIG_PACKAGE_luci-app-nicx-telemetry=y
+CONFIG_PACKAGE_vnstat2=y
+CONFIG_PACKAGE_luci-app-nlbwmon=y
+CONFIG_PACKAGE_luci-app-statistics=y
+CONFIG_PACKAGE_collectd-mod-ping=y
+CONFIG_PACKAGE_collectd-mod-thermal=y
+CONFIG_PACKAGE_zram-swap=y
+
+CONFIG_PACKAGE_luci-app-adguardhome=y

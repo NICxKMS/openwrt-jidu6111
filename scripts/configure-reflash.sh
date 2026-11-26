@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+project=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+cd "$project/openwrt"
+profile=${1:?Specify gcc-kernel or clang-thinlto}
+case "$profile" in
+    gcc-kernel|clang-thinlto) ;;
+    *) printf 'Unknown build profile %s\n' "$profile" >&2; exit 2;;
+esac
+
+monitor_pin=$(awk '$2 == "nicx_monitor" { sub(/^.*\^/, "", $3); print $3 }' ../sources/feeds.conf)
+if [[ ! "$monitor_pin" =~ ^[0-9a-f]{40}$ ]]; then
+    printf 'Invalid Nicx Monitor source pin in sources/feeds.conf.\n' >&2
+    exit 1
+fi
+if [[ ! -d feeds/nicx_monitor ]]; then
+    printf 'The Nicx Monitor feed is missing. Run make feeds.\n' >&2
+    exit 1
+fi
+if [[ $(git -C feeds/nicx_monitor rev-parse HEAD 2>/dev/null) != "$monitor_pin" ]]; then
+    printf 'The Nicx Monitor feed does not match the source pin. Preserve local edits, move openwrt/feeds/nicx_monitor aside, and run make feeds.\n' >&2
+    exit 1
+fi
+if ! monitor_status=$(git -C feeds/nicx_monitor status --porcelain --untracked-files=all) || [[ -n "$monitor_status" ]]; then
+    printf 'The Nicx Monitor feed has local changes or cannot be checked. Preserve local edits and rerun make feeds with a clean checkout.\n' >&2
+    exit 1
+fi
+for package in nicx-telemetry luci-app-nicx-telemetry; do
+    source="feeds/nicx_monitor/nicx-router-monitor/openwrt/$package"
+    destination="package/feeds/nicx_monitor/$package"
+    if [[ -e "package/$package" || -L "package/$package" || ! "$source" -ef "$destination" ]]; then
+        printf 'Expected %s from the pinned Nicx Monitor feed. Run make feeds in a clean OpenWrt checkout.\n' "$package" >&2
+        exit 1
+    fi
+done
+
+make scripts/config/conf prepare-tmpinfo
+
+seed=$(mktemp .config.reflash-seed.XXXXXX)
+resolved=$(mktemp .config.reflash.XXXXXX)
+trap 'rm -f "$seed" "$resolved" "$resolved.old"' EXIT
+
+awk '
+    /^CONFIG_TARGET_qualcommbe_ipq95xx_DEVICE_jiorouter_ax6000-jidu6111=/ { next }
+    /^(CONFIG_BINARY_FOLDER=|# CONFIG_BINARY_FOLDER is not set)/ { next }
+    /^(CONFIG_|# CONFIG_)/ {
+        key = $0
+        sub(/^# /, "", key)
+        sub(/[= ].*$/, "", key)
+        if (!(key in settings)) order[++count] = key
+        settings[key] = $0
+    }
+    END { for (i = 1; i <= count; i++) print settings[order[i]] }
+' ../config/jidu6111.diffconfig ../config/jidu6111-reflash.diffconfig > "$seed"
+if [[ "$profile" == clang-thinlto ]]; then
+    printf '%s\n' 'CONFIG_KERNEL_LTO_CLANG_THIN=y' >> "$seed"
+fi
+printf 'CONFIG_BINARY_FOLDER="%s/bin-%s"\n' "$PWD" "$profile" >> "$seed"
+
+./scripts/config/conf --defconfig="$seed" -w "$resolved" Config.in
+while IFS= read -r setting; do
+    if ! grep -Fqx "$setting" "$resolved"; then
+        printf 'Could not select %s. Check the source revision and feed dependencies.\n' "$setting" >&2
+        exit 1
+    fi
+done < <(grep -E '^(CONFIG_.+=.+|# CONFIG_.+ is not set)$' "$seed")
+
+if [[ -f .config ]]; then cp -p .config .config.old; fi
+mv "$resolved" .config
