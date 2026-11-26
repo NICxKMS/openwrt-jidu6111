@@ -18,3 +18,7 @@ apk --repositories-file /dev/null -X https://raw.githubusercontent.com/NICxKMS/o
 - [Signed APK repository](packages/)
 - [Firmware installation guide](https://github.com/NICxKMS/openwrt-jidu6111/blob/d2e7f9259b31074846f04d6de1970ac2b9600d1c/README.md#install-on-the-router)
 - [Package installation guide](https://github.com/NICxKMS/openwrt-jidu6111/blob/d2e7f9259b31074846f04d6de1970ac2b9600d1c/README.md#install-from-the-matching-apk-repository)
+
+## Beta firmware
+
+The [Linux 6.18.64 beta](beta/README.md) offers **Try first · Clang ThinLTO** and **Fallback · GCC**, each with dual-band and 5 GHz-only images and a matching signed APK feed.
