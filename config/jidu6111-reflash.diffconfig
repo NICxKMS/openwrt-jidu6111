@@ -2,7 +2,7 @@ CONFIG_TARGET_MULTI_PROFILE=y
 CONFIG_TARGET_DEVICE_qualcommbe_ipq95xx_DEVICE_jiorouter_ax6000-jidu6111=y
 CONFIG_TARGET_DEVICE_qualcommbe_ipq95xx_DEVICE_jiorouter_ax6000-jidu6111-wcss-off=y
 
-# Keep the existing GCC major version for package LTO. The kernel uses GCC without LTO.
+# Use GCC 14 for eligible package LTO in both kernel build profiles.
 CONFIG_TOOLCHAINOPTS=y
 CONFIG_GCC_USE_VERSION_14=y
 CONFIG_USE_LTO=y

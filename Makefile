@@ -3,12 +3,12 @@
 
 JOBS ?= 4
 PROFILE := CONFIG_TARGET_qualcommbe_ipq95xx_DEVICE_jiorouter_ax6000-jidu6111=y
-OPTIMIZED_PROFILE := CONFIG_TARGET_DEVICE_qualcommbe_ipq95xx_DEVICE_jiorouter_ax6000-jidu6111=y
+REFLASH_PROFILE := CONFIG_TARGET_DEVICE_qualcommbe_ipq95xx_DEVICE_jiorouter_ax6000-jidu6111=y
 
-.PHONY: help host-deps source feeds configure configure-optimized configure-thinlto menuconfig save-config check download build build-optimized build-thinlto package package-index cache-stats
+.PHONY: help host-deps source feeds configure configure-gcc-kernel configure-clang-thinlto menuconfig save-config check download build build-gcc-kernel build-clang-thinlto package package-index cache-stats
 
 # OpenWrt splits PATH on whitespace. Keep absolute entries it can pass intact.
-feeds configure configure-optimized configure-thinlto menuconfig save-config download build build-optimized build-thinlto package package-index cache-stats: export PATH := $(shell printf '%s' "$$PATH" | awk -v RS=: '/^\// && !/[[:space:]]/ { printf "%s%s", separator, $$0; separator = ":" }')
+feeds configure configure-gcc-kernel configure-clang-thinlto menuconfig save-config download build build-gcc-kernel build-clang-thinlto package package-index cache-stats: export PATH := $(shell printf '%s' "$$PATH" | awk -v RS=: '/^\// && !/[[:space:]]/ { printf "%s%s", separator, $$0; separator = ":" }')
 
 help:
 	@printf '%s\n' \
@@ -16,13 +16,15 @@ help:
 	  'make source       Prepare the pinned OpenWrt source checkout' \
 	  'make feeds        Fetch and index the pinned package feeds' \
 	  'make configure    Apply config/jidu6111.diffconfig' \
-	  'make configure-optimized   Configure both JIDU6111 Wi-Fi variants' \
+	  'make configure-clang-thinlto   Select both radio variants with Clang ThinLTO' \
+	  'make configure-gcc-kernel      Select both radio variants with GCC' \
 	  'make menuconfig   Edit packages and image options interactively' \
 	  'make save-config  Save menuconfig changes to the workspace config' \
 	  'make download     Prefetch sources for the selected packages' \
 	  'make build        Build the JIDU6111 images and APKs (JOBS=4 by default)' \
-	  'make build-optimized        Build both variants and a matching signed APK repository' \
-	  'make build-thinlto          Build both variants with a Clang ThinLTO kernel' \
+	  'make build-clang-thinlto       Try first: Clang ThinLTO kernel and modules' \
+	  'make build-gcc-kernel          Fallback: GCC kernel and modules, kernel LTO off' \
+	  '                               Each produces two radio images and a signed APK feed.' \
 	  'make package PACKAGE=<name>   Build a selected package and its dependencies' \
 	  'make package-index           Refresh the signed APK indexes and combined repository' \
 	  'make cache-stats             Show compiler cache usage and hit rate'
@@ -56,15 +58,15 @@ configure: source
 	  mv "$$next" .config
 configure: SHELL := /bin/bash
 
-configure-optimized configure-thinlto: source
+configure-gcc-kernel configure-clang-thinlto: source
 	@bash scripts/apply-feed-patches.sh
-	@bash scripts/configure-optimized.sh $(patsubst configure-%,%,$@)
+	@bash scripts/configure-reflash.sh $(patsubst configure-%,%,$@)
 
 menuconfig: check
 	$(MAKE) -C openwrt menuconfig
 
 save-config: check
-	@grep -Fqx '$(PROFILE)' openwrt/.config || { echo 'Run make configure before saving the standard profile. Edit config/jidu6111-optimized.diffconfig for optimized builds.' >&2; exit 1; }
+	@grep -Fqx '$(PROFILE)' openwrt/.config || { echo 'Run make configure before saving the standard profile. Edit config/jidu6111-reflash.diffconfig for reflash builds.' >&2; exit 1; }
 	@cd openwrt && ./scripts/diffconfig.sh > ../config/jidu6111.diffconfig.new
 	@test -s config/jidu6111.diffconfig.new
 	@mv config/jidu6111.diffconfig.new config/jidu6111.diffconfig
@@ -72,7 +74,7 @@ save-config: check
 check: source
 	@bash scripts/apply-feed-patches.sh
 	@grep -Eq '^KERNEL_PATCHVER[[:space:]]*:=[[:space:]]*6\.18$$' openwrt/target/linux/qualcommbe/Makefile || { echo 'Expected the qualcommbe Linux 6.18 target.' >&2; exit 1; }
-	@grep -Fqx -e '$(PROFILE)' -e '$(OPTIMIZED_PROFILE)' openwrt/.config || { echo 'Run make configure to select JIDU6111.' >&2; exit 1; }
+	@grep -Fqx -e '$(PROFILE)' -e '$(REFLASH_PROFILE)' openwrt/.config || { echo 'Run make configure to select JIDU6111.' >&2; exit 1; }
 
 download: check
 	$(MAKE) -C openwrt -j$(JOBS) download
@@ -80,10 +82,10 @@ download: check
 build: check
 	$(MAKE) -C openwrt -j$(JOBS)
 
-build-optimized: configure-optimized
-build-thinlto: configure-thinlto
+build-gcc-kernel: configure-gcc-kernel
+build-clang-thinlto: configure-clang-thinlto
 
-build-optimized build-thinlto:
+build-gcc-kernel build-clang-thinlto:
 	$(MAKE) -C openwrt -j$(JOBS)
 	$(MAKE) -C openwrt package/index package/merge-index
 

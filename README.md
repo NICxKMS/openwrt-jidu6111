@@ -18,34 +18,36 @@ The first build downloads sources and compiles the cross-toolchain. You can run 
 
 The workspace `make` commands pass only absolute, whitespace-free `PATH` entries to OpenWrt. If you run native OpenWrt commands on WSL and see `find: The relative path ... is included in the PATH`, prefix the command with `PATH=/usr/local/bin:/usr/bin:/bin`.
 
-### Optimized reflash images
+### Choose a reflash build
 
-Build both radio variants with a Clang ThinLTO kernel and modules.
+Try **Clang ThinLTO** first. Choose **GCC fallback** if you run into problems with the Clang build or need to build without LLVM. Both profiles include the same driver fixes, memory tuning, monitoring and GCC LTO for eligible packages. The choice changes how the kernel and its modules are built.
 
 ```sh
 make host-deps
 make source
 make feeds
-make build-thinlto JOBS=8
+make build-clang-thinlto JOBS=8
 ```
 
-| Build command | Kernel compiler | Output root |
-| --- | --- | --- |
-| `make build-thinlto JOBS=8` | Clang with ThinLTO | `openwrt/bin-thinlto/` |
-| `make build-optimized JOBS=8` | OpenWrt GCC toolchain | `openwrt/bin-optimized/` |
+| Which to choose | Build command | Kernel and modules | Output root |
+| --- | --- | --- | --- |
+| **Try first** | `make build-clang-thinlto JOBS=8` | Clang with ThinLTO | `openwrt/bin-clang-thinlto/` |
+| **GCC fallback** | `make build-gcc-kernel JOBS=8` | GCC with kernel LTO off | `openwrt/bin-gcc-kernel/` |
 
-In each output root, `targets/qualcommbe/ipq95xx/` contains images, the manifest, and `sha256sums`. The sibling `repository/` contains the matching signed APKs. Use the same output root for the image and packages. From the image directory, run `sha256sum -c sha256sums` before uploading.
+Each profile builds both radio variants, for **four sysupgrade images** across the two profiles. Pick the radio variant within your chosen profile.
 
-Edit `config/jidu6111-optimized.diffconfig` to persist package changes for either optimized build. `make save-config` saves changes from the standard profile.
-
-The arm64 kernel requires LLVM 15 or newer. The ThinLTO build was tested with LLVM 21. With a versioned LLVM toolchain, pass `KERNEL_LLVM=-21` or an absolute tool directory ending in `/`. See the [driver PR audit](sources/jidu6111-driver-audit.md) for included fixes and board applicability.
-
-| Sysupgrade filename ending | Radios |
+| Radio choice | Sysupgrade filename ending |
 | --- | --- |
-| `jidu6111-squashfs-sysupgrade.bin` | 2.4 GHz and 5 GHz |
-| `jidu6111-wcss-off-squashfs-sysupgrade.bin` | 5 GHz only. Disables the 2.4 GHz device, its WCSS processor and its 43 MiB reservation. |
+| **Dual-band** for 2.4 GHz and 5 GHz | `jidu6111-squashfs-sysupgrade.bin` |
+| **5 GHz only** to free the 43 MiB WCSS reservation | `jidu6111-wcss-off-squashfs-sysupgrade.bin` |
 
-Both use smaller ath11k RX buffers, GCC LTO for eligible user-space packages, and kernel support for pressure stalls, proportional process memory and slab counters. They include AdGuard Home, Nicx Router Monitor, vnStat, nlbwmon, collectd and zram.
+The two profiles use the same filenames and JIDU6111 device ID. Each image must use the signed APK feed from its own build profile. In each output root, `targets/qualcommbe/ipq95xx/` holds the images, manifests and `sha256sums`, while `repository/` holds the signed APK feed. From the image directory, run `sha256sum -c sha256sums` before uploading.
+
+Edit `config/jidu6111-reflash.diffconfig` to persist package changes for both reflash profiles. `make save-config` saves changes from the standard profile.
+
+Clang ThinLTO requires LLVM 15 or newer and was tested with LLVM 21. With a versioned LLVM toolchain, pass `KERNEL_LLVM=-21` or an absolute tool directory ending in `/`. Both profiles use smaller ath11k RX buffers, support pressure stalls, proportional process memory and slab counters, and include AdGuard Home, Nicx Router Monitor, vnStat, nlbwmon, collectd and zram. See the [driver PR audit](sources/jidu6111-driver-audit.md) for included fixes.
+
+**Migration from the old names.** `make build-optimized` and `openwrt/bin-optimized/` became `make build-gcc-kernel` and `openwrt/bin-gcc-kernel/`. `make build-thinlto` and `openwrt/bin-thinlto/` became `make build-clang-thinlto` and `openwrt/bin-clang-thinlto/`. For configuration only, use `make configure-gcc-kernel` or `make configure-clang-thinlto`.
 
 1. Connect by Ethernet. Save the current sysupgrade image, matching APKs, configuration backup and package list. Confirm the backup contains the telemetry keep files under `/etc/nicx-telemetry/` and `/etc/config/nicx-telemetry`. Keep that archive private.
 2. Back up the actual vnStat, nlbwmon and RRD database directories separately. Resolve their configured paths first, since a configuration backup can omit those directories. Back up existing AdGuard Home configuration and data if present.
@@ -77,7 +79,7 @@ Choose AdGuard Home or Adblock Fast as your DNS filtering service. If AdGuard Ho
 
 ### Compile a package later
 
-On the build computer, run `make menuconfig`, press `/`, and search for the package. Select `<M>` for a separate APK and save. Compile it with `make package PACKAGE=<name>` and update the local repository with `make package-index`. For the standard profile, use `make save-config` to keep the selection in `config/jidu6111.diffconfig`. For an optimized profile, record the selection in `config/jidu6111-optimized.diffconfig`. For example, after selecting `htop`:
+On the build computer, run `make menuconfig`, press `/`, and search for the package. Select `<M>` for a separate APK and save. Compile it with `make package PACKAGE=<name>` and update the local repository with `make package-index`. For the standard profile, use `make save-config` to keep the selection in `config/jidu6111.diffconfig`. For the reflash profiles, record the selection in `config/jidu6111-reflash.diffconfig`. For example, after selecting `htop`:
 
 ```sh
 make package PACKAGE=htop
@@ -92,10 +94,10 @@ Put your own OpenWrt package recipe at `openwrt/package/local/<name>/Makefile`, 
 
 ### Install from the matching APK repository
 
-`make package-index` refreshes the signed repository for the active profile. The standard profile uses `openwrt/staging_dir/packages/qualcommbe/`. The optimized profiles use `openwrt/bin-optimized/repository/` or `openwrt/bin-thinlto/repository/`. Serve the repository from the build tree so its links to the APK files resolve. Replace `BUILD_HOST_LAN_IP` with the address the router can reach. This example serves the ThinLTO repository.
+`make package-index` refreshes the signed repository for the active profile. The standard profile uses `openwrt/staging_dir/packages/qualcommbe/`. The Clang ThinLTO and GCC profiles use `openwrt/bin-clang-thinlto/repository/` and `openwrt/bin-gcc-kernel/repository/`, respectively. Serve the repository from the build tree so its links to the APK files resolve. Replace `BUILD_HOST_LAN_IP` with the address the router can reach. This example serves the Clang ThinLTO repository.
 
 ```sh
-python3 -m http.server 8000 --bind BUILD_HOST_LAN_IP --directory openwrt/bin-thinlto/repository
+python3 -m http.server 8000 --bind BUILD_HOST_LAN_IP --directory openwrt/bin-clang-thinlto/repository
 ```
 
 On the router, use that repository for the install. APK will resolve the dependencies and verify signatures with the key in the firmware.

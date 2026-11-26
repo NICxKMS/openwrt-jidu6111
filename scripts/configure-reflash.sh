@@ -3,10 +3,10 @@ set -euo pipefail
 
 project=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$project/openwrt"
-flavor=${1:-optimized}
-case "$flavor" in
-    optimized|thinlto) ;;
-    *) printf 'Unknown build profile %s\n' "$flavor" >&2; exit 2;;
+profile=${1:?Specify gcc-kernel or clang-thinlto}
+case "$profile" in
+    gcc-kernel|clang-thinlto) ;;
+    *) printf 'Unknown build profile %s\n' "$profile" >&2; exit 2;;
 esac
 
 for package in nicx-telemetry luci-app-nicx-telemetry; do
@@ -23,8 +23,8 @@ done
 
 make scripts/config/conf prepare-tmpinfo
 
-seed=$(mktemp .config.optimized-seed.XXXXXX)
-resolved=$(mktemp .config.optimized.XXXXXX)
+seed=$(mktemp .config.reflash-seed.XXXXXX)
+resolved=$(mktemp .config.reflash.XXXXXX)
 trap 'rm -f "$seed" "$resolved" "$resolved.old"' EXIT
 
 awk '
@@ -37,11 +37,11 @@ awk '
         settings[key] = $0
     }
     END { for (i = 1; i <= count; i++) print settings[order[i]] }
-' ../config/jidu6111.diffconfig ../config/jidu6111-optimized.diffconfig > "$seed"
-if [[ "$flavor" == thinlto ]]; then
+' ../config/jidu6111.diffconfig ../config/jidu6111-reflash.diffconfig > "$seed"
+if [[ "$profile" == clang-thinlto ]]; then
     printf '%s\n' 'CONFIG_KERNEL_LTO_CLANG_THIN=y' >> "$seed"
 fi
-printf 'CONFIG_BINARY_FOLDER="%s/bin-%s"\n' "$PWD" "$flavor" >> "$seed"
+printf 'CONFIG_BINARY_FOLDER="%s/bin-%s"\n' "$PWD" "$profile" >> "$seed"
 
 ./scripts/config/conf --defconfig="$seed" -w "$resolved" Config.in
 while IFS= read -r setting; do
