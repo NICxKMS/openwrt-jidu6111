@@ -1,13 +1,225 @@
+diff --git a/config/Config-kernel.in b/config/Config-kernel.in
+index 7c531cefbc..639a4046ca 100644
+--- a/config/Config-kernel.in
++++ b/config/Config-kernel.in
+@@ -26,2 +26,9 @@ config KERNEL_PRINTK
+ 
++config KERNEL_LTO_CLANG_THIN
++	bool "Build the arm64 kernel and modules with Clang ThinLTO"
++	depends on aarch64
++	help
++	  Requires Clang, LLD and LLVM binutils. Packages continue to use the
++	  configured OpenWrt target toolchain.
++
+ config KERNEL_SWAP
+diff --git a/include/kernel-defaults.mk b/include/kernel-defaults.mk
+index 724bcbabcd..151cff8d0b 100644
+--- a/include/kernel-defaults.mk
++++ b/include/kernel-defaults.mk
+@@ -117,2 +117,3 @@ define Kernel/Configure/Default
+ 	$(LINUX_CONF_CMD) > $(LINUX_DIR)/.config.target
++	$(if $(CONFIG_KERNEL_LTO_CLANG_THIN),sed -i '/^CONFIG_LTO_NONE=/d' $(LINUX_DIR)/.config.target)
+ # copy CONFIG_KERNEL_* settings over to .config.target
+@@ -129,2 +130,3 @@ define Kernel/Configure/Default
+ 	}
++	$(if $(CONFIG_KERNEL_LTO_CLANG_THIN),$(KERNEL_MAKE) olddefconfig && grep -Fqx 'CONFIG_LTO_CLANG_THIN=y' $(LINUX_DIR)/.config)
+ 	$(_SINGLE) [ -d $(LINUX_DIR)/user_headers ] || $(KERNEL_MAKE) $(if $(findstring uml,$(BOARD)),ARCH=$(ARCH)) INSTALL_HDR_PATH=$(LINUX_DIR)/user_headers headers_install
+diff --git a/include/kernel.mk b/include/kernel.mk
+index 0149cf1b64..3e64b005ed 100644
+--- a/include/kernel.mk
++++ b/include/kernel.mk
+@@ -45,3 +45,3 @@ else
+   endif
+-  KERNEL_BUILD_DIR ?= $(BUILD_DIR)/linux-$(BOARD)_$(SUBTARGET)
++  KERNEL_BUILD_DIR ?= $(BUILD_DIR)/linux-$(BOARD)_$(SUBTARGET)$(if $(CONFIG_KERNEL_LTO_CLANG_THIN),-thinlto)
+   LINUX_DIR ?= $(KERNEL_BUILD_DIR)/linux-$(LINUX_VERSION)
+@@ -102,4 +102,9 @@ KERNEL_MAKE = $(MAKE) $(KERNEL_MAKEOPTS)
+ 
++ifeq ($(CONFIG_KERNEL_LTO_CLANG_THIN),y)
++  KERNEL_LLVM ?= 1
++  KERNEL_UNSUPPORTED_OPTIMIZATION := -fno-caller-saves
++endif
++
+ KERNEL_MAKE_FLAGS = \
+-	KCFLAGS="$(call iremap,$(BUILD_DIR),$(notdir $(BUILD_DIR))) $(IREMAP_STAGING_DIR) $(IREMAP_TOOLCHAIN_DIR) $(filter-out -fno-plt,$(call qstrip,$(CONFIG_EXTRA_OPTIMIZATION))) $(call qstrip,$(CONFIG_KERNEL_CFLAGS))" \
++	KCFLAGS="$(call iremap,$(BUILD_DIR),$(notdir $(BUILD_DIR))) $(IREMAP_STAGING_DIR) $(IREMAP_TOOLCHAIN_DIR) $(filter-out -fno-plt $(KERNEL_UNSUPPORTED_OPTIMIZATION),$(call qstrip,$(CONFIG_EXTRA_OPTIMIZATION))) $(call qstrip,$(CONFIG_KERNEL_CFLAGS))" \
+ 	KAFLAGS="$(call iremap,$(BUILD_DIR),$(notdir $(BUILD_DIR))) $(IREMAP_STAGING_DIR) $(IREMAP_TOOLCHAIN_DIR)" \
+@@ -120,3 +125,5 @@ KERNEL_MAKE_FLAGS = \
+ 
+-ifneq (,$(KERNEL_CC))
++ifeq ($(CONFIG_KERNEL_LTO_CLANG_THIN),y)
++  KERNEL_MAKE_FLAGS += LLVM="$(KERNEL_LLVM)"
++else ifneq (,$(KERNEL_CC))
+   KERNEL_MAKE_FLAGS += CC="$(KERNEL_CC)"
+diff --git a/include/package.mk b/include/package.mk
+index 4e70baf076..1e0051ba3d 100644
+--- a/include/package.mk
++++ b/include/package.mk
+@@ -128,3 +128,4 @@ ifneq ($(PREV_STAMP_PREPARED),)
+ else
+-  STAMP_PREPARED=$(PKG_BUILD_DIR)/.prepared$(if $(QUILT)$(DUMP),,_$(PKG_FILES_MD5)_$(call confvar,CONFIG_AUTOREMOVE $(PKG_PREPARED_DEPENDS)))
++  # Reprepare packages when LTO changes so their makefiles cannot reuse old objects.
++  STAMP_PREPARED=$(PKG_BUILD_DIR)/.prepared$(if $(QUILT)$(DUMP),,_$(PKG_FILES_MD5)_$(call confvar,CONFIG_AUTOREMOVE CONFIG_USE_LTO $(PKG_PREPARED_DEPENDS)))
+ endif
 diff --git a/package/kernel/mac80211/Makefile b/package/kernel/mac80211/Makefile
-index 19e7c577e4..eb01ab45df 100644
+index 27d1dd7d26..a14061a91a 100644
 --- a/package/kernel/mac80211/Makefile
 +++ b/package/kernel/mac80211/Makefile
-@@ -12,7 +12,7 @@ PKG_NAME:=mac80211
- 
- PKG_SOURCE_VERSION:=7.2
+@@ -14,3 +14,3 @@ PKG_SOURCE_VERSION:=7.2
  PKG_VERSION:=$(subst -,_,$(PKG_SOURCE_VERSION))
--PKG_RELEASE:=15
-+PKG_RELEASE:=16
+-PKG_RELEASE:=18
++PKG_RELEASE:=20
  PKG_LICENSE:=GPL-2.0-only
- PKG_LICENSE_FILES:=COPYING
+diff --git a/package/network/config/netifd/Makefile b/package/network/config/netifd/Makefile
+index d9479102ad..6eaba948bd 100644
+--- a/package/network/config/netifd/Makefile
++++ b/package/network/config/netifd/Makefile
+@@ -3,3 +3,3 @@ include $(TOPDIR)/rules.mk
+ PKG_NAME:=netifd
+-PKG_RELEASE:=1
++PKG_RELEASE:=2
  
+diff --git a/package/network/config/wifi-scripts/Makefile b/package/network/config/wifi-scripts/Makefile
+index e3e1b8860a..a2c88bffdb 100644
+--- a/package/network/config/wifi-scripts/Makefile
++++ b/package/network/config/wifi-scripts/Makefile
+@@ -11,3 +11,3 @@ PKG_NAME:=wifi-scripts
+ PKG_VERSION:=1.0
+-PKG_RELEASE:=5
++PKG_RELEASE:=6
+ PKG_LICENSE:=GPL-2.0
+diff --git a/package/network/config/wifi-scripts/files-ucode/lib/netifd/wireless/mac80211.sh b/package/network/config/wifi-scripts/files-ucode/lib/netifd/wireless/mac80211.sh
+index 506be9f47a..8c590f6d33 100755
+--- a/package/network/config/wifi-scripts/files-ucode/lib/netifd/wireless/mac80211.sh
++++ b/package/network/config/wifi-scripts/files-ucode/lib/netifd/wireless/mac80211.sh
+@@ -66,3 +66,3 @@ function get_channel_frequency(band, channel) {
+ 
+-function setup_phy(phy, config, data) {
++function setup_phy(phy, config, data, in_use) {
+ 	if (config.channel == "auto")
+@@ -72,3 +72,6 @@ function setup_phy(phy, config, data) {
+ 
+-	if (config.country_code) {
++	/* the regulatory domain is the whole system's: a radio with no enabled
++	 * interface (a disabled radio, or a spare one still at the generated
++	 * '00') does not set it */
++	if (config.country_code && in_use) {
+ 		log(`Setting country code to ${config.country_code}`);
+@@ -207,3 +210,3 @@ function setup() {
+ 	validate('device', config);
+-	setup_phy(data.phy, data.config, data.data);
++	setup_phy(data.phy, data.config, data.data, length(data.interfaces ?? {}) > 0);
+ 
+diff --git a/package/network/config/wifi-scripts/files-ucode/usr/share/ucode/wifi/hostapd.uc b/package/network/config/wifi-scripts/files-ucode/usr/share/ucode/wifi/hostapd.uc
+index 5d53e954a6..839d49c759 100644
+--- a/package/network/config/wifi-scripts/files-ucode/usr/share/ucode/wifi/hostapd.uc
++++ b/package/network/config/wifi-scripts/files-ucode/usr/share/ucode/wifi/hostapd.uc
+@@ -71,3 +71,5 @@ function device_country_code(config) {
+ 	for (let name, radio in status) {
+-		if (!radio.config.country)
++		/* the country of a radio with no enabled interface (netifd gives
++		 * a disabled radio none) is not the system's */
++		if (!radio.config.country || !length(radio.interfaces))
+ 			continue;
+@@ -426,2 +428,10 @@ function device_htmode_append(config) {
+ 			]);
++		} else {
++			/* Without a colour, clients can't tell this BSS's PPDUs
++			 * from another's, so forbid them spatial reuse. With no SR
++			 * Parameter Set at all they may use non-SRG OBSS PD up to
++			 * -62 dBm, and ignore this AP's weaker frames as an OBSS's.
++			 */
++			config.he_spr_sr_control = 3;
++			append_vars(config, [ 'he_spr_sr_control' ]);
+ 		}
+diff --git a/package/network/config/wifi-scripts/files/lib/netifd/wireless/mac80211.sh b/package/network/config/wifi-scripts/files/lib/netifd/wireless/mac80211.sh
+index 7910959344..57c65e471f 100755
+--- a/package/network/config/wifi-scripts/files/lib/netifd/wireless/mac80211.sh
++++ b/package/network/config/wifi-scripts/files/lib/netifd/wireless/mac80211.sh
+@@ -506,2 +506,7 @@ mac80211_hostapd_setup_base() {
+ 			append base_cfg "he_bss_color_disabled=1" "$N"
++			# Without a colour, clients can't tell this BSS's PPDUs from
++			# another's, so forbid them spatial reuse. With no SR Parameter
++			# Set at all they may use non-SRG OBSS PD up to -62 dBm, and
++			# ignore this AP's weaker frames as an OBSS's.
++			append base_cfg "he_spr_sr_control=3" "$N"
+ 		fi
+diff --git a/package/network/services/hostapd/Makefile b/package/network/services/hostapd/Makefile
+index b54dfa99b8..827f6c2ca0 100644
+--- a/package/network/services/hostapd/Makefile
++++ b/package/network/services/hostapd/Makefile
+@@ -7,3 +7,3 @@ include $(TOPDIR)/rules.mk
+ PKG_NAME:=hostapd
+-PKG_RELEASE:=9
++PKG_RELEASE:=10
+ 
+diff --git a/package/network/services/hostapd/src/src/ap/ubus.c b/package/network/services/hostapd/src/src/ap/ubus.c
+index ea6bcba5f0..32533f214e 100644
+--- a/package/network/services/hostapd/src/src/ap/ubus.c
++++ b/package/network/services/hostapd/src/src/ap/ubus.c
+@@ -528,2 +528,5 @@ hostapd_bss_get_features(struct ubus_context *ctx, struct ubus_object *obj,
+ 	blobmsg_add_u8(&b, "vht_supported", vht_supported(hapd->iface->hw_features));
++	/* a channel switch (switch_chan, CHAN_SWITCH) can widen a radio set
++	 * up narrower to 160 MHz: hostapd adds [VHT160] for it (patch 895) */
++	blobmsg_add_u8(&b, "csa160", 1);
+ #ifdef CONFIG_WPS
+@@ -1311,2 +1314,5 @@ static void switch_chan_fallback_cb(void *eloop_data, void *user_ctx)
+ 
++	/* keep the new channel through the restart, as CHAN_SWITCH does; on
++	 * an ACS radio the setup would otherwise clear it and run ACS */
++	iface->is_ch_switch_dfs = true;
+ 	hostapd_switch_channel_fallback(iface, freq_params);
+@@ -1335,2 +1341,3 @@ hostapd_switch_chan(struct ubus_context *ctx, struct ubus_object *obj,
+ 	u8 seg0 = 0, seg1 = 0;
++	u32 vht_capab;
+ 	int ret = UBUS_STATUS_OK;
+@@ -1392,2 +1399,10 @@ hostapd_switch_chan(struct ubus_context *ctx, struct ubus_object *obj,
+ 
++	/* the configured vht_capab has no [VHT160] below 160 MHz (#22436);
++	 * hostapd_switch_channel() adds it for a switch to 160 MHz (patch 895),
++	 * so check the new chandef against the hardware's here as well */
++	vht_capab = iconf->vht_capab;
++	if (chwidth == CHANWIDTH_160MHZ && mode &&
++	    (mode->vht_capab & VHT_CAP_SUPP_CHAN_WIDTH_MASK))
++		vht_capab |= VHT_CAP_SUPP_CHAN_WIDTH_160MHZ;
++
+ 	hostapd_set_freq_params(&css.freq_params, iconf->hw_mode,
+@@ -1402,3 +1417,3 @@ hostapd_switch_chan(struct ubus_context *ctx, struct ubus_object *obj,
+ 				chwidth, seg0, seg1,
+-				iconf->vht_capab,
++				vht_capab,
+ 				mode ? &mode->he_capab[IEEE80211_MODE_AP] :
+diff --git a/package/network/utils/iw/Makefile b/package/network/utils/iw/Makefile
+index fceacf06f8..9e25c589d3 100644
+--- a/package/network/utils/iw/Makefile
++++ b/package/network/utils/iw/Makefile
+@@ -11,3 +11,3 @@ PKG_NAME:=iw
+ PKG_VERSION:=6.17
+-PKG_RELEASE:=1
++PKG_RELEASE:=2
+  
+diff --git a/rules.mk b/rules.mk
+index 64e9291f7d..76f316f430 100644
+--- a/rules.mk
++++ b/rules.mk
+@@ -201,3 +201,3 @@ IREMAP_TOOLCHAIN_DIR = $(call iremap,$(TOOLCHAIN_DIR),staging_dir/$(notdir $(TOO
+ PACKAGE_DIR?=$(BIN_DIR)/packages
+-PACKAGE_DIR_ALL?=$(TOPDIR)/staging_dir/packages/$(BOARD)
++PACKAGE_DIR_ALL?=$(if $(call qstrip,$(CONFIG_BINARY_FOLDER)),$(OUTPUT_DIR)/repository,$(TOPDIR)/staging_dir/packages/$(BOARD))
+ BUILD_DIR:=$(BUILD_DIR_BASE)/$(TARGET_DIR_NAME)
+diff --git a/target/linux/qualcommbe/image/ipq95xx.mk b/target/linux/qualcommbe/image/ipq95xx.mk
+index fa3f81ddf2..307db82b79 100644
+--- a/target/linux/qualcommbe/image/ipq95xx.mk
++++ b/target/linux/qualcommbe/image/ipq95xx.mk
+@@ -51,2 +51,11 @@ define Device/jiorouter_ax6000-jidu6111
+ endef
++
++define Device/jiorouter_ax6000-jidu6111-wcss-off
++	$(call Device/jiorouter_ax6000-jidu6111)
++	DEVICE_VARIANT := JIDU6111 (5 GHz only)
++	DEVICE_DTS := ipq9554-jiorouter-ax6000-jidu6111-wcss-off
++	BOARD_NAME := jiorouter_ax6000-jidu6111
++	SUPPORTED_DEVICES := jiorouter,ax6000-jidu6111
++endef
++TARGET_DEVICES += jiorouter_ax6000-jidu6111-wcss-off
+ TARGET_DEVICES += jiorouter_ax6000-jidu6111

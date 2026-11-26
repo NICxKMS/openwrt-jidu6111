@@ -1,7 +1,7 @@
-tree dc736685bfccd0e9e1888cffed540a3dba5f9d7f
-parent ecd9120f0451920fd277c717fa06cc358d553409
-parent 5b52c230e955eda0519db9a0961faf869bb66cdf
-author Local OpenWrt Build <openwrt-build@localhost> 1795092185 +0000
-committer Local OpenWrt Build <openwrt-build@localhost> 1795092185 +0000
+tree d66ff6d58e2c6c44e5ee8d9252d8a49e25bdcf97
+parent f76496253dfc6a987843a32c5f18b92f668dd3e0
+parent 0906df49261c33da63a409c9f7ad5c1f0f68a69e
+author Local OpenWrt Build <openwrt-build@localhost> 1795676047 +0000
+committer Local OpenWrt Build <openwrt-build@localhost> 1795676047 +0000
 
-Merge commit '5b52c230e955eda0519db9a0961faf869bb66cdf' into jidu6111-daily-20261119
+Merge OpenWrt main and JIDU6J11 board support from 2026-11-26
