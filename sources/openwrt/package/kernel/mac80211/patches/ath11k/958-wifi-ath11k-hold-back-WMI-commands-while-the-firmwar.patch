@@ -16,8 +16,9 @@ ready timeout:
 BENCH5
 
 Return -ESHUTDOWN for commands from outside the restart worker while
-ATH11K_FLAG_RECOVERY is set. mac80211 replays the configuration when the
-driver restarts the hardware.
+ATH11K_FLAG_RECOVERY is set. Check each send attempt, including commands
+already waiting for credits or CE descriptors when recovery starts.
+mac80211 replays the configuration when the driver restarts the hardware.
 
 Tested-on: IPQ8074 hw2.0 AHB WLAN.HK.2.9.0.1-02146-QCAHKSWPL_SILICONZ-1
 
@@ -29,14 +30,13 @@ Signed-off-by: Julius Bairaktaris <julius@bairaktaris.de>
 
 --- a/drivers/net/wireless/ath/ath11k/wmi.c
 +++ b/drivers/net/wireless/ath/ath11k/wmi.c
-@@ -303,6 +303,10 @@ int ath11k_wmi_cmd_send(struct ath11k_pd
- 
- 	might_sleep();
+@@ -280,5 +280,9 @@ static int ath11k_wmi_cmd_send_nowait(struct ath11k_pdev_wmi *wmi,
+ 	int ret;
+ 	u32 cmd = 0;
  
 +	if (test_bit(ATH11K_FLAG_RECOVERY, &ab->dev_flags) &&
 +	    current_work() != &ab->restart_work)
 +		return -ESHUTDOWN;
 +
- 	if (ab->hw_params.credit_flow) {
- 		wait_event_timeout(wmi_ab->tx_credits_wq, ({
- 			ret = ath11k_wmi_cmd_send_nowait(wmi, skb, cmd_id);
+ 	if (skb_push(skb, sizeof(struct wmi_cmd_hdr)) == NULL)
+ 		return -ENOMEM;

@@ -89,7 +89,7 @@ index 27d1dd7d26..a14061a91a 100644
 @@ -14,3 +14,3 @@ PKG_SOURCE_VERSION:=7.2
  PKG_VERSION:=$(subst -,_,$(PKG_SOURCE_VERSION))
 -PKG_RELEASE:=18
-+PKG_RELEASE:=20
++PKG_RELEASE:=21
  PKG_LICENSE:=GPL-2.0-only
 diff --git a/package/kernel/mac80211/patches/build/150-sysfs-backport.patch b/package/kernel/mac80211/patches/build/150-sysfs-backport.patch
 index 877040f6ea..e1d4bc16de 100644
@@ -107,7 +107,7 @@ index d9479102ad..bf8c69d0bf 100644
 @@ -3,3 +3,3 @@ include $(TOPDIR)/rules.mk
  PKG_NAME:=netifd
 -PKG_RELEASE:=1
-+PKG_RELEASE:=3
++PKG_RELEASE:=4
  
 diff --git a/package/network/config/netifd/files/lib/netifd/dhcp.script b/package/network/config/netifd/files/lib/netifd/dhcp.script
 index db8deac9e6..39d7df68f8 100755
@@ -138,7 +138,7 @@ index 8cfd326876..4541685c75 100644
  		f.seek();
 -		while (!f.error()) {
 -			let data = trim(f.read("line"));
-+		for (let line = f.read("line"); length(line); line = f.read("line")) {
++		for (let line = f.read("line"); line != null; line = f.read("line")) {
 +			let data = trim(line);
  			try {
 diff --git a/package/network/config/wifi-scripts/Makefile b/package/network/config/wifi-scripts/Makefile
@@ -350,7 +350,7 @@ index b54dfa99b8..835439bef4 100644
 @@ -7,3 +7,3 @@ include $(TOPDIR)/rules.mk
  PKG_NAME:=hostapd
 -PKG_RELEASE:=9
-+PKG_RELEASE:=12
++PKG_RELEASE:=13
  
 diff --git a/package/network/services/hostapd/patches/824-eloop-do-not-busy-loop-with-epoll-when-no-timeout-is-registered.patch b/package/network/services/hostapd/patches/824-eloop-do-not-busy-loop-with-epoll-when-no-timeout-is-registered.patch
 new file mode 100644
@@ -484,7 +484,7 @@ index ea6bcba5f0..ae3dc776e1 100644
 @@ -1420,2 +1438,5 @@ hostapd_switch_chan(struct ubus_context *ctx, struct ubus_object *obj,
  	freq_params = malloc(sizeof(*freq_params));
 +	if (!freq_params)
-+		return ret;
++		return UBUS_STATUS_UNKNOWN_ERROR;
 +
  	memcpy(freq_params, &css.freq_params, sizeof(*freq_params));
 @@ -1471,3 +1492,3 @@ hostapd_vendor_elements(struct ubus_context *ctx, struct ubus_object *obj,

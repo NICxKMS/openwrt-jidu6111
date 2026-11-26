@@ -7,7 +7,7 @@ CONFIG_TOOLCHAINOPTS=y
 CONFIG_GCC_USE_VERSION_14=y
 CONFIG_USE_LTO=y
 
-# Enable pressure stalls, IRQ accounting, process PSS, slab and allocation attribution.
+# Enable pressure stalls, IRQ accounting, process PSS and slab counters.
 CONFIG_KERNEL_PSI=y
 CONFIG_KERNEL_PROC_PAGE_MONITOR=y
 CONFIG_KERNEL_IRQ_TIME_ACCOUNTING=y

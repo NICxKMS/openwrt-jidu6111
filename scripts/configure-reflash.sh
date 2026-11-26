@@ -22,6 +22,10 @@ if [[ $(git -C feeds/nicx_monitor rev-parse HEAD 2>/dev/null) != "$monitor_pin" 
     printf 'The Nicx Monitor feed does not match the source pin. Preserve local edits, move openwrt/feeds/nicx_monitor aside, and run make feeds.\n' >&2
     exit 1
 fi
+if ! monitor_status=$(git -C feeds/nicx_monitor status --porcelain --untracked-files=all) || [[ -n "$monitor_status" ]]; then
+    printf 'The Nicx Monitor feed has local changes or cannot be checked. Preserve local edits and rerun make feeds with a clean checkout.\n' >&2
+    exit 1
+fi
 for package in nicx-telemetry luci-app-nicx-telemetry; do
     source="feeds/nicx_monitor/nicx-router-monitor/openwrt/$package"
     destination="package/feeds/nicx_monitor/$package"

@@ -6,13 +6,10 @@ Subject: [PATCH ath-next] wifi: ath11k: report TX retries in station
 
 ath11k does not fill NL80211_STA_INFO_TX_RETRIES, and mac80211's TX
 status accounting leaves it at zero because the driver reports no
-per-rate try counts. The HTT PPDU statistics carry the MPDUs tried and
-acknowledged per user. Report the unacknowledged MPDUs per station as TX
-retries and leave TX failures to mac80211. Over 6 runs of 30 s the
-station's TX retries track the firmware's pdev mpdu_requeued counter to
-within 57 MPDUs.
+per-rate try counts. Sum the long and short retry counts from each user
+completion report. Leave TX failures to mac80211.
 
-Tested-on: IPQ8074 hw2.0 AHB WLAN.HK.2.9.0.1-02146-QCAHKSWPL_SILICONZ-1
+Original version tested on IPQ8074 hw2.0 AHB WLAN.HK.2.9.0.1-02146-QCAHKSWPL_SILICONZ-1
 
 Link: https://lore.kernel.org/all/20261018171803.1545946-1-julius@bairaktaris.de/
 Assisted-by: Claude:claude-opus-5-5
@@ -33,10 +30,10 @@ Signed-off-by: Julius Bairaktaris <julius@bairaktaris.de>
  	sta = peer->sta;
  	arsta = ath11k_sta_to_arsta(sta);
  
-+	if (usr_stats->cmpltn_cmn.mpdu_tried >
-+	    usr_stats->cmpltn_cmn.mpdu_success)
-+		arsta->tx_retries += usr_stats->cmpltn_cmn.mpdu_tried -
-+				     usr_stats->cmpltn_cmn.mpdu_success;
++	if (usr_stats->tlv_flags & BIT(HTT_PPDU_STATS_TAG_USR_COMPLTN_COMMON))
++		arsta->tx_retries +=
++			HTT_USR_CMPLTN_LONG_RETRY(usr_stats->cmpltn_cmn.flags) +
++			HTT_USR_CMPLTN_SHORT_RETRY(usr_stats->cmpltn_cmn.flags);
 +
  	memset(&arsta->txrate, 0, sizeof(arsta->txrate));
  

@@ -8,11 +8,10 @@
 /etc/init.d/packet_steering enabled || exit 0
 
 PENDING=/var/run/packet-steering.pending
-[ -e "$PENDING" ] && exit 0
-touch "$PENDING"
+mkdir "$PENDING" 2>/dev/null || exit 0
 
 (
 	sleep 3
-	rm -f "$PENDING"
+	rmdir "$PENDING"
 	/etc/init.d/packet_steering reload
 ) &
