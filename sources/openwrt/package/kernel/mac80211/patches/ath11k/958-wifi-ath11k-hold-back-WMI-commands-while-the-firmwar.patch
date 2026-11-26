@@ -31,7 +31,7 @@ Signed-off-by: Julius Bairaktaris <julius@bairaktaris.de>
 
 --- a/drivers/net/wireless/ath/ath11k/wmi.c
 +++ b/drivers/net/wireless/ath/ath11k/wmi.c
-@@ -280,5 +280,9 @@ static int ath11k_wmi_cmd_send_nowait(struct ath11k_pdev_wmi *wmi,
+@@ -280,6 +280,10 @@ static int ath11k_wmi_cmd_send_nowait(struct ath11k_pdev_wmi *wmi,
  	int ret;
  	u32 cmd = 0;
  
@@ -41,6 +41,7 @@ Signed-off-by: Julius Bairaktaris <julius@bairaktaris.de>
 +
  	if (skb_push(skb, sizeof(struct wmi_cmd_hdr)) == NULL)
  		return -ENOMEM;
+ 
 --- a/drivers/net/wireless/ath/ath11k/core.c
 +++ b/drivers/net/wireless/ath/ath11k/core.c
 @@ -2562,6 +2562,11 @@
