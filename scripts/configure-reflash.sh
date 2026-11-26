@@ -10,9 +10,16 @@ case "$profile" in
 esac
 
 monitor_pin=$(awk '$2 == "nicx_monitor" { sub(/^.*\^/, "", $3); print $3 }' ../sources/feeds.conf)
-if [[ ! "$monitor_pin" =~ ^[0-9a-f]{40}$ ||
-      $(git -C feeds/nicx_monitor rev-parse HEAD 2>/dev/null) != "$monitor_pin" ]]; then
-    printf 'The Nicx Monitor feed is missing or does not match the source pin. Run make feeds.\n' >&2
+if [[ ! "$monitor_pin" =~ ^[0-9a-f]{40}$ ]]; then
+    printf 'Invalid Nicx Monitor source pin in sources/feeds.conf.\n' >&2
+    exit 1
+fi
+if [[ ! -d feeds/nicx_monitor ]]; then
+    printf 'The Nicx Monitor feed is missing. Run make feeds.\n' >&2
+    exit 1
+fi
+if [[ $(git -C feeds/nicx_monitor rev-parse HEAD 2>/dev/null) != "$monitor_pin" ]]; then
+    printf 'The Nicx Monitor feed does not match the source pin. Preserve local edits, move openwrt/feeds/nicx_monitor aside, and run make feeds.\n' >&2
     exit 1
 fi
 for package in nicx-telemetry luci-app-nicx-telemetry; do
@@ -32,6 +39,7 @@ trap 'rm -f "$seed" "$resolved" "$resolved.old"' EXIT
 
 awk '
     /^CONFIG_TARGET_qualcommbe_ipq95xx_DEVICE_jiorouter_ax6000-jidu6111=/ { next }
+    /^(CONFIG_BINARY_FOLDER=|# CONFIG_BINARY_FOLDER is not set)/ { next }
     /^(CONFIG_|# CONFIG_)/ {
         key = $0
         sub(/^# /, "", key)

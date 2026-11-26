@@ -17,13 +17,13 @@ radio runs narrower.
 
 Signed-off-by: Christopher Griffin <christophergriffin05@gmail.com>
 ---
- src/ap/hostapd.c | 58 ++++++++++++++++++++++++++++++++++++++++++++++--
+ src/ap/hostapd.c | 58 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++--
  src/ap/hostapd.h |  2 ++
  2 files changed, 58 insertions(+), 2 deletions(-)
 
 --- a/src/ap/hostapd.c
 +++ b/src/ap/hostapd.c
-@@ -6155,19 +6155,65 @@ void hostapd_chan_switch_config(struct h
+@@ -6155,19 +6155,68 @@ void hostapd_chan_switch_config(struct h
  }
  
  
@@ -74,14 +74,17 @@ Signed-off-by: Christopher Griffin <christophergriffin05@gmail.com>
  			   struct csa_settings *settings)
  {
  	int ret;
-+	bool vht160_now;
++	u32 previous_vht_capab;
++	bool previous_csa_vht160_added;
  
  	if (!(hapd->iface->drv_flags & WPA_DRIVER_FLAGS_AP_CSA)) {
  		wpa_printf(MSG_INFO, "CSA is not supported");
  		return -1;
  	}
  
-+	vht160_now = hostapd_csa_vht160(hapd->iface, settings);
++	previous_vht_capab = hapd->iface->conf->vht_capab;
++	previous_csa_vht160_added = hapd->iface->csa_vht160_added;
++	hostapd_csa_vht160(hapd->iface, settings);
 +
  	ret = hostapd_fill_csa_settings(hapd, settings);
  	if (ret)
@@ -90,7 +93,7 @@ Signed-off-by: Christopher Griffin <christophergriffin05@gmail.com>
  
  	ret = hostapd_drv_switch_channel(hapd, settings);
  	free_beacon_data(&settings->beacon_csa);
-@@ -6179,11 +6225,19 @@ int hostapd_switch_channel(struct hostap
+@@ -6179,11 +6225,16 @@ int hostapd_switch_channel(struct hostap
  	if (ret) {
  		/* if we failed, clean cs parameters */
  		hostapd_cleanup_cs_params(hapd);
@@ -102,11 +105,8 @@ Signed-off-by: Christopher Griffin <christophergriffin05@gmail.com>
  	return 0;
 +
 +undo_vht160:
-+	if (vht160_now) {
-+		hapd->iface->conf->vht_capab &= ~(VHT_CAP_SUPP_CHAN_WIDTH_160MHZ |
-+						  VHT_CAP_SHORT_GI_160);
-+		hapd->iface->csa_vht160_added = false;
-+	}
++	hapd->iface->conf->vht_capab = previous_vht_capab;
++	hapd->iface->csa_vht160_added = previous_csa_vht160_added;
 +	return ret;
  }
  

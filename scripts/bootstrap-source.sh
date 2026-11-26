@@ -5,7 +5,7 @@ project=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 destination="$project/openwrt"
 sources="$project/sources"
 
-if [[ -d "$destination/.git" ]]; then
+if [[ -e "$destination/.git" ]]; then
     expected_tree=$(awk '$1 == "tree" { print $2; exit }' "$sources/openwrt.commit")
     if [[ $(git -C "$destination" rev-parse 'HEAD^{tree}') != "$expected_tree" ]]; then
         printf 'The OpenWrt checkout uses a different revision. Preserve local edits and move it aside before running make source.\n' >&2
