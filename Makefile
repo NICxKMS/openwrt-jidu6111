@@ -13,7 +13,7 @@ feeds configure configure-gcc-kernel configure-clang-thinlto menuconfig save-con
 help:
 	@printf '%s\n' \
 	  'make host-deps    Install Ubuntu/Debian build dependencies' \
-	  '                  On Ubuntu 22.04, follow the README for Clang ThinLTO.' \
+	  '                  Clang ThinLTO on Ubuntu 22.04 needs clang-15, llvm-15 and lld-15.' \
 	  'make source       Prepare the pinned OpenWrt source checkout' \
 	  'make feeds        Fetch and index the pinned package feeds' \
 	  'make configure    Apply config/jidu6111.diffconfig' \

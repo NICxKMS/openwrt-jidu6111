@@ -45,7 +45,14 @@ The two profiles use the same filenames and JIDU6111 device ID. Each image must 
 
 Edit `config/jidu6111-reflash.diffconfig` to persist package changes for both reflash profiles. `make save-config` saves changes from the standard profile.
 
-Clang ThinLTO requires LLVM 15 or newer and was tested with LLVM 21. On Ubuntu 22.04, install `clang-15`, `llvm-15`, and `lld-15` from the Ubuntu package repositories, then run `make build-clang-thinlto KERNEL_LLVM=-15`. With a versioned LLVM toolchain, pass `KERNEL_LLVM=-21` or an absolute tool directory ending in `/`. Both profiles use smaller ath11k RX buffers and include AdGuard Home, Nicx Router Monitor, vnStat, nlbwmon, collectd and zram.
+Clang ThinLTO requires LLVM 15 or newer and was tested with LLVM 21. Ubuntu 22.04 ships LLVM 14 by default. After `make host-deps`, install and select the LLVM 15 toolchain from the Ubuntu package repositories.
+
+```bash
+sudo apt-get install clang-15 llvm-15 lld-15
+make build-clang-thinlto KERNEL_LLVM=-15
+```
+
+For another versioned toolchain, pass its suffix (for example, `KERNEL_LLVM=-21`) or an absolute tool directory ending in `/`. Both profiles use smaller ath11k RX buffers and include AdGuard Home, Nicx Router Monitor, vnStat, nlbwmon, collectd and zram.
 
 #### CPU and memory monitoring
 

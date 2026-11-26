@@ -1,6 +1,6 @@
 # JIDU6111 driver audit, 26 November 2026
 
-Searches returned 318 distinct OpenWrt pull requests across Qualcomm target, board and SoC, Wi-Fi, Ethernet, shared networking and platform support. The platform search included WCSS, PCIe, NAND, USB and thermal changes. Follow-up searches covered netifd, hostapd and Wi-Fi configuration. The review also checked the Qualcomm board-data repository and the upstream Linux ath11k, PPE and QCA807x histories. OpenWrt main remains at `f76496253dfc`, and mac80211 backports remain on 7.2. The build pins the updated [JIDU6J11 board support](https://github.com/openwrt/openwrt/commit/727ed7916a1df588a5a325119e837fec5483c062), which adds the WAN-derived label MAC alias and bumps the U-Boot tools package release.
+Searches returned 318 distinct OpenWrt pull requests across Qualcomm target, board and SoC, Wi-Fi, Ethernet, shared networking and platform support. The platform search included WCSS, PCIe, NAND, USB and thermal changes. Follow-up searches covered netifd, hostapd and Wi-Fi configuration. The review also checked the Qualcomm board-data repository and the upstream Linux ath11k, PPE and QCA807x histories. OpenWrt main remains at `f76496253dfc`, and mac80211 backports remain on 7.2. The build pins the updated [JIDU6111 board support](https://github.com/openwrt/openwrt/commit/727ed7916a1df588a5a325119e837fec5483c062), which adds the WAN-derived label MAC alias and bumps the U-Boot tools package release.
 
 ## Included
 
