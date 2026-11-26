@@ -1,5 +1,5 @@
 diff --git a/config/Config-kernel.in b/config/Config-kernel.in
-index 7c531cefbc..639a4046ca 100644
+index 7c531cefbc..3adedc214d 100644
 --- a/config/Config-kernel.in
 +++ b/config/Config-kernel.in
 @@ -26,2 +26,9 @@ config KERNEL_PRINTK
@@ -12,6 +12,27 @@ index 7c531cefbc..639a4046ca 100644
 +	  configured OpenWrt target toolchain.
 +
  config KERNEL_SWAP
+@@ -348,2 +355,8 @@ endif
+ 
++config KERNEL_IRQ_TIME_ACCOUNTING
++	bool "Account for CPU time spent in interrupt handlers"
++	depends on aarch64
++	help
++	  Track hard and soft interrupt time separately in the CPU statistics.
++
+ config KERNEL_PSI
+@@ -888,2 +901,11 @@ config KERNEL_STACKDEPOT_MAX_FRAMES
+ 
++config KERNEL_MEM_ALLOC_PROFILING
++	bool "Enable kernel memory allocation profiling"
++	help
++	  Track kernel allocations by source location in /proc/allocinfo.
++
++config KERNEL_MEM_ALLOC_PROFILING_ENABLED_BY_DEFAULT
++	bool "Enable kernel memory allocation profiling at boot"
++	depends on KERNEL_MEM_ALLOC_PROFILING
++
+ config KERNEL_PROC_PAGE_MONITOR
 diff --git a/include/kernel-defaults.mk b/include/kernel-defaults.mk
 index 724bcbabcd..151cff8d0b 100644
 --- a/include/kernel-defaults.mk
@@ -70,26 +91,67 @@ index 27d1dd7d26..a14061a91a 100644
 -PKG_RELEASE:=18
 +PKG_RELEASE:=20
  PKG_LICENSE:=GPL-2.0-only
+diff --git a/package/kernel/mac80211/patches/build/150-sysfs-backport.patch b/package/kernel/mac80211/patches/build/150-sysfs-backport.patch
+index 877040f6ea..e1d4bc16de 100644
+--- a/package/kernel/mac80211/patches/build/150-sysfs-backport.patch
++++ b/package/kernel/mac80211/patches/build/150-sysfs-backport.patch
+@@ -6,3 +6,3 @@
+  
+-+#if LINUX_VERSION_IS_GEQ(7,0,0)
+++#if LINUX_VERSION_IS_GEQ(6,18,65)
+  static const struct ns_common *wiphy_namespace(const struct device *d)
 diff --git a/package/network/config/netifd/Makefile b/package/network/config/netifd/Makefile
-index d9479102ad..6eaba948bd 100644
+index d9479102ad..bf8c69d0bf 100644
 --- a/package/network/config/netifd/Makefile
 +++ b/package/network/config/netifd/Makefile
 @@ -3,3 +3,3 @@ include $(TOPDIR)/rules.mk
  PKG_NAME:=netifd
 -PKG_RELEASE:=1
-+PKG_RELEASE:=2
++PKG_RELEASE:=3
  
+diff --git a/package/network/config/netifd/files/lib/netifd/dhcp.script b/package/network/config/netifd/files/lib/netifd/dhcp.script
+index db8deac9e6..39d7df68f8 100755
+--- a/package/network/config/netifd/files/lib/netifd/dhcp.script
++++ b/package/network/config/netifd/files/lib/netifd/dhcp.script
+@@ -16,2 +16,4 @@ set_classless_routes() {
+ setup_interface () {
++	local action="$1"
++
+ 	proto_init_update "*" 1
+@@ -61,3 +63,5 @@ setup_interface () {
+ 	[ -n "$timezone" ] && json_add_int timezone "$timezone"
+-	[ -n "$lease" ]    && json_add_int leasetime "$lease"
++	# A changed value in the interface data makes netifd send ifupdate, and the
++	# firewall reloads on it. Some servers vary the lease time at each renew.
++	[ -n "$lease" ] && [ "$action" != renew ] && json_add_int leasetime "$lease"
+ 	[ -n "$serverid" ] && json_add_string dhcpserver "$serverid"
+@@ -109,3 +113,3 @@ case "$1" in
+ 	renew|bound)
+-		setup_interface
++		setup_interface "$1"
+ 	;;
+diff --git a/package/network/config/netifd/files/lib/netifd/utils.uc b/package/network/config/netifd/files/lib/netifd/utils.uc
+index 8cfd326876..4541685c75 100644
+--- a/package/network/config/netifd/files/lib/netifd/utils.uc
++++ b/package/network/config/netifd/files/lib/netifd/utils.uc
+@@ -60,4 +60,4 @@ export function handler_load(path, cb)
+ 		f.seek();
+-		while (!f.error()) {
+-			let data = trim(f.read("line"));
++		for (let line = f.read("line"); length(line); line = f.read("line")) {
++			let data = trim(line);
+ 			try {
 diff --git a/package/network/config/wifi-scripts/Makefile b/package/network/config/wifi-scripts/Makefile
-index e3e1b8860a..a2c88bffdb 100644
+index e3e1b8860a..4a6aa2ff13 100644
 --- a/package/network/config/wifi-scripts/Makefile
 +++ b/package/network/config/wifi-scripts/Makefile
 @@ -11,3 +11,3 @@ PKG_NAME:=wifi-scripts
  PKG_VERSION:=1.0
 -PKG_RELEASE:=5
-+PKG_RELEASE:=6
++PKG_RELEASE:=8
  PKG_LICENSE:=GPL-2.0
 diff --git a/package/network/config/wifi-scripts/files-ucode/lib/netifd/wireless/mac80211.sh b/package/network/config/wifi-scripts/files-ucode/lib/netifd/wireless/mac80211.sh
-index 506be9f47a..8c590f6d33 100755
+index 506be9f47a..ecacca6168 100755
 --- a/package/network/config/wifi-scripts/files-ucode/lib/netifd/wireless/mac80211.sh
 +++ b/package/network/config/wifi-scripts/files-ucode/lib/netifd/wireless/mac80211.sh
 @@ -66,3 +66,3 @@ function get_channel_frequency(band, channel) {
@@ -109,6 +171,26 @@ index 506be9f47a..8c590f6d33 100755
  	validate('device', config);
 -	setup_phy(data.phy, data.config, data.data);
 +	setup_phy(data.phy, data.config, data.data, length(data.interfaces ?? {}) > 0);
+ 
+@@ -243,2 +246,5 @@ function setup() {
+ 			break;
++		case 'monitor':
++			netifd.set_vif(k, v.config.ifname);
++			break;
+ 		}
+diff --git a/package/network/config/wifi-scripts/files-ucode/usr/share/ucode/wifi/ap.uc b/package/network/config/wifi-scripts/files-ucode/usr/share/ucode/wifi/ap.uc
+index 755b18267a..0380cf29bf 100644
+--- a/package/network/config/wifi-scripts/files-ucode/usr/share/ucode/wifi/ap.uc
++++ b/package/network/config/wifi-scripts/files-ucode/usr/share/ucode/wifi/ap.uc
+@@ -79,3 +79,3 @@ function bss_refusal(config, band) {
+ 	    !(config.ft_psk_generate_local ?? ft_psk_local_default(config)) &&
+-	    (!config.r0kh || !config.r1kh) && !config.auth_secret && !config.key)
++	    (!config.r0kh || !config.r1kh) && !config.auth_server_shared_secret && !config.key)
+ 		return 'FT_KEY_CANT_BE_DERIVED';
+@@ -562,3 +562,3 @@ function iface_roaming(config) {
+ 		if (!config.r0kh || !config.r1kh) {
+-			let ft_key = md5(`${config.mobility_domain}/${config.auth_secret ?? config.key}`);
++			let ft_key = md5(`${config.mobility_domain}/${config.auth_server_shared_secret ?? config.key}`);
  
 diff --git a/package/network/config/wifi-scripts/files-ucode/usr/share/ucode/wifi/hostapd.uc b/package/network/config/wifi-scripts/files-ucode/usr/share/ucode/wifi/hostapd.uc
 index 5d53e954a6..839d49c759 100644
@@ -132,6 +214,123 @@ index 5d53e954a6..839d49c759 100644
 +			config.he_spr_sr_control = 3;
 +			append_vars(config, [ 'he_spr_sr_control' ]);
  		}
+diff --git a/package/network/config/wifi-scripts/files/etc/hotplug.d/ieee80211/10-wifi-detect b/package/network/config/wifi-scripts/files/etc/hotplug.d/ieee80211/10-wifi-detect
+index a9d5f701bb..a5a7f7a9cd 100644
+--- a/package/network/config/wifi-scripts/files/etc/hotplug.d/ieee80211/10-wifi-detect
++++ b/package/network/config/wifi-scripts/files/etc/hotplug.d/ieee80211/10-wifi-detect
+@@ -2,5 +2,12 @@
+ 
+-[ "${ACTION}" = "add" ] && [ -f /etc/board.json ] && {
++[ -f /etc/board.json ] || exit 0
++
++case "${ACTION}" in
++add)
+ 	/sbin/wifi config
+ 	ubus call network.wireless retry
+-}
++	;;
++remove)
++	ubus call network.wireless retry
++	;;
++esac
+diff --git a/package/network/config/wifi-scripts/files/lib/netifd/netifd-wireless.sh b/package/network/config/wifi-scripts/files/lib/netifd/netifd-wireless.sh
+index 328fede2a9..5a7ca92630 100644
+--- a/package/network/config/wifi-scripts/files/lib/netifd/netifd-wireless.sh
++++ b/package/network/config/wifi-scripts/files/lib/netifd/netifd-wireless.sh
+@@ -316,9 +316,8 @@ wireless_vif_parse_encryption() {
+ _wireless_set_brsnoop_isolation() {
+-	local multicast_to_unicast="$1"
+-	local isolate
++	local isolate proxy_arp multicast_to_unicast multicast_to_unicast_all
+ 
+-	json_get_vars isolate proxy_arp
++	json_get_vars isolate proxy_arp multicast_to_unicast multicast_to_unicast_all
+ 
+ 	[ ${isolate:-0} -gt 0 -o -z "$network_bridge" ] && return
+-	[ ${multicast_to_unicast:-1} -gt 0 -o ${proxy_arp:-0} -gt 0 ] && json_add_boolean isolate 1
++	[ ${multicast_to_unicast_all:-${multicast_to_unicast:-0}} -gt 0 -o ${proxy_arp:-0} -gt 0 ] && json_add_boolean isolate 1
+ }
+@@ -331,4 +330,2 @@ for_each_interface() {
+ 
+-	local multicast_to_unicast
+-
+ 	json_get_keys _w_ifaces interfaces
+@@ -340,5 +337,4 @@ for_each_interface() {
+ 			json_get_var network_ifname bridge-ifname
+-			json_get_var multicast_to_unicast multicast_to_unicast
+ 			json_select config
+-			_wireless_set_brsnoop_isolation "$multicast_to_unicast"
++			_wireless_set_brsnoop_isolation
+ 			json_get_var _w_type mode
+diff --git a/package/network/config/wifi-scripts/files/lib/netifd/wireless-device.uc b/package/network/config/wifi-scripts/files/lib/netifd/wireless-device.uc
+index b54afeee78..0c9071f5e0 100644
+--- a/package/network/config/wifi-scripts/files/lib/netifd/wireless-device.uc
++++ b/package/network/config/wifi-scripts/files/lib/netifd/wireless-device.uc
+@@ -70,9 +70,10 @@ function handle_link(dev, data, up)
+ 
+-	if (ap && config.multicast_to_unicast != null)
+-		dev_data.multicast_to_unicast = config.multicast_to_unicast ? 1 : 0;
++	if (ap) {
++		dev_data.multicast_to_unicast =
++			(config.multicast_to_unicast_all ?? config.multicast_to_unicast) ? 1 : 0;
++		dev_data.wireless_isolate = !!(config.isolate ?? config.ap_isolate);
++	}
+ 
+-	if (data.type == "vif" && config.mode == "ap") {
++	if (data.type == "vif" && config.mode == "ap")
+ 		dev_data.wireless_proxyarp = !!config.proxy_arp;
+-		dev_data.wireless_isolate = !!config.isolate;
+-	}
+ 
+@@ -438,2 +439,20 @@ function start()
+ 
++/* the device has interfaces, but none of them exists any more */
++function wdev_ifaces_gone(wdev)
++{
++	let found = false;
++
++	for (let section, data in wdev.handler_data) {
++		if (data.type != "vif" || !data.ifname)
++			continue;
++
++		if (access("/sys/class/net/" + data.ifname))
++			return false;
++
++		found = true;
++	}
++
++	return found;
++}
++
+ function retry_setup()
+@@ -443,2 +462,8 @@ function retry_setup()
+ 
++	if (this.state == "up" && wdev_ifaces_gone(this)) {
++		this.dbg("interfaces are gone, restart");
++		this.teardown();
++		return;
++	}
++
+ 	if (this.state != "down" || !this.autostart)
+diff --git a/package/network/config/wifi-scripts/files/lib/netifd/wireless.uc b/package/network/config/wifi-scripts/files/lib/netifd/wireless.uc
+index 525c01d60a..02852ddcdb 100644
+--- a/package/network/config/wifi-scripts/files/lib/netifd/wireless.uc
++++ b/package/network/config/wifi-scripts/files/lib/netifd/wireless.uc
+@@ -291,2 +291,14 @@ function config_init(uci)
+ 
++				/* follow the isolation and multicast-to-unicast settings of
++				 * the wifi-iface, unless the wifi-vlan sets its own */
++				let parent = vif.config;
++				let inherit = {
++					bridge_isolate: parent.bridge_isolate,
++					isolate: parent.isolate ?? parent.ap_isolate,
++					multicast_to_unicast: parent.multicast_to_unicast_all ?? parent.multicast_to_unicast,
++				};
++				for (let k, v in inherit)
++					if (config[k] == null && v != null)
++						config[k] = v;
++
+ 				let vlan = {
 diff --git a/package/network/config/wifi-scripts/files/lib/netifd/wireless/mac80211.sh b/package/network/config/wifi-scripts/files/lib/netifd/wireless/mac80211.sh
 index 7910959344..57c65e471f 100755
 --- a/package/network/config/wifi-scripts/files/lib/netifd/wireless/mac80211.sh
@@ -145,35 +344,128 @@ index 7910959344..57c65e471f 100755
 +			append base_cfg "he_spr_sr_control=3" "$N"
  		fi
 diff --git a/package/network/services/hostapd/Makefile b/package/network/services/hostapd/Makefile
-index b54dfa99b8..827f6c2ca0 100644
+index b54dfa99b8..835439bef4 100644
 --- a/package/network/services/hostapd/Makefile
 +++ b/package/network/services/hostapd/Makefile
 @@ -7,3 +7,3 @@ include $(TOPDIR)/rules.mk
  PKG_NAME:=hostapd
 -PKG_RELEASE:=9
-+PKG_RELEASE:=10
++PKG_RELEASE:=12
  
+diff --git a/package/network/services/hostapd/patches/824-eloop-do-not-busy-loop-with-epoll-when-no-timeout-is-registered.patch b/package/network/services/hostapd/patches/824-eloop-do-not-busy-loop-with-epoll-when-no-timeout-is-registered.patch
+new file mode 100644
+index 0000000000..ea6e553af3
+--- /dev/null
++++ b/package/network/services/hostapd/patches/824-eloop-do-not-busy-loop-with-epoll-when-no-timeout-is-registered.patch
+@@ -0,0 +1,32 @@
++From 554c6058b9e82a8e5a0cda713ac28750dfc4d105 Mon Sep 17 00:00:00 2001
++From: Daniil Gentili <daniil@daniil.it>
++Date: Sat, 24 Oct 2026 17:55:08 +0000
++Subject: [PATCH] eloop: Do not busy-loop with epoll when no timeout is
++ registered
++
++With CONFIG_ELOOP_EPOLL, eloop_run() initializes timeout_ms to -1 once
++and then only updates it while a timeout is registered. Once the last
++timeout fires, timeout_ms keeps its last value, usually 0 (the timeout
++was due, or less than 1 ms away), and epoll_wait() returns immediately
++on every iteration until a new timeout gets registered.
++
++hostapd's RADIUS server hits this as soon as its last session expires:
++it then burns a full CPU core while idle. Pass -1 when there is no
++timeout, as the poll() path already does.
++
++Signed-off-by: Daniil Gentili <daniil@daniil.it>
++---
++ src/utils/eloop.c | 2 +-
++ 1 file changed, 1 insertion(+), 1 deletion(-)
++
++--- a/src/utils/eloop.c
+++++ b/src/utils/eloop.c
++@@ -1167,7 +1167,7 @@ void eloop_run(void)
++ 			res = 0;
++ 		} else {
++ 			res = epoll_wait(eloop.epollfd, eloop.epoll_events,
++-					 eloop.count, timeout_ms);
+++					 eloop.count, timeout ? timeout_ms : -1);
++ 		}
++ #endif /* CONFIG_ELOOP_EPOLL */
++ #ifdef CONFIG_ELOOP_KQUEUE
+diff --git a/package/network/services/hostapd/patches/897-FT-Set-RSNXE-Used-only-when-the-AP-advertises-an-RSNXE.patch b/package/network/services/hostapd/patches/897-FT-Set-RSNXE-Used-only-when-the-AP-advertises-an-RSNXE.patch
+new file mode 100644
+index 0000000000..0bf2f461e7
+--- /dev/null
++++ b/package/network/services/hostapd/patches/897-FT-Set-RSNXE-Used-only-when-the-AP-advertises-an-RSNXE.patch
+@@ -0,0 +1,43 @@
++From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
++From: Christopher Griffin <christophergriffin05@gmail.com>
++Date: Sun, 1 Nov 2026 22:20:32 -0600
++Subject: [PATCH] FT: Set RSNXE Used only when the AP advertises an RSNXE
++
++RSNXE Used in the FTE of an FT Reassociation Response indicates that the
++AP uses the RSNXE in other frames (commit 51d1924bd), and wpa_supplicant
++checks it against the RSNXE of the Beacon and Probe Response frames. The
++AP set it whenever sae_pwe was 1 or 2. A BSS without an SAE AKM, for
++example FT-EAP or FT-PSK, usually has no extended RSN capability to
++advertise and thus no RSNXE, but with sae_pwe set its responses still
++announced one. wpa_supplicant then rejected every FT Reassociation
++Response ("FT: FTE indicated that AP uses RSNXE, but RSNXE was not
++included in Beacon/Probe Response frames") and deauthenticated with
++reason 13 (invalid element). OpenWrt 25.12.2 sets sae_pwe=2 on WPA3 and
++WPA2/WPA3 Enterprise BSSs, so FT-EAP roams to such APs failed.
++
++Set RSNXE Used only when the Beacon and Probe Response frames carry an
++RSNXE: it is not omitted with rsn_override_omit_rsnxe, and the AP has an
++extended RSN capability to advertise. The response to a STA that sent no
++RSNXE is unchanged.
++
++Assisted-by: Claude:claude-opus-5-5
++Signed-off-by: Christopher Griffin <christophergriffin05@gmail.com>
++---
++ src/ap/wpa_auth_ft.c | 5 +++++
++ 1 file changed, 5 insertions(+)
++
++--- a/src/ap/wpa_auth_ft.c
+++++ b/src/ap/wpa_auth_ft.c
++@@ -2710,7 +2710,12 @@ u8 * wpa_sm_write_assoc_resp_ies(struct
++ 		anonce = NULL;
++ 		snonce = NULL;
++ 	}
+++	/* RSNXE Used indicates that the AP uses the RSNXE in other frames, so
+++	 * only an AP whose Beacon and Probe Response frames carry an RSNXE
+++	 * may set it. */
++ 	rsnxe_used = (auth_alg == WLAN_AUTH_FT) &&
+++		!conf->rsn_override_omit_rsnxe &&
+++		wpa_write_rsnxe(conf, rsnxe_buf, sizeof(rsnxe_buf)) > 0 &&
++ 		(conf->sae_pwe == SAE_PWE_HASH_TO_ELEMENT ||
++ 		 conf->sae_pwe == SAE_PWE_BOTH);
++ #ifdef CONFIG_TESTING_OPTIONS
 diff --git a/package/network/services/hostapd/src/src/ap/ubus.c b/package/network/services/hostapd/src/src/ap/ubus.c
-index ea6bcba5f0..32533f214e 100644
+index ea6bcba5f0..ae3dc776e1 100644
 --- a/package/network/services/hostapd/src/src/ap/ubus.c
 +++ b/package/network/services/hostapd/src/src/ap/ubus.c
-@@ -528,2 +528,5 @@ hostapd_bss_get_features(struct ubus_context *ctx, struct ubus_object *obj,
+@@ -246,2 +246,5 @@ hostapd_bss_ban_client(struct hostapd_ubus_bss *ubus, u8 *addr, int time,
+ 		ban = os_zalloc(sizeof(*ban));
++		if (!ban)
++			return;
++
+ 		memcpy(ban->addr, addr, sizeof(ban->addr));
+@@ -528,2 +531,5 @@ hostapd_bss_get_features(struct ubus_context *ctx, struct ubus_object *obj,
  	blobmsg_add_u8(&b, "vht_supported", vht_supported(hapd->iface->hw_features));
 +	/* a channel switch (switch_chan, CHAN_SWITCH) can widen a radio set
 +	 * up narrower to 160 MHz: hostapd adds [VHT160] for it (patch 895) */
 +	blobmsg_add_u8(&b, "csa160", 1);
  #ifdef CONFIG_WPS
-@@ -1311,2 +1314,5 @@ static void switch_chan_fallback_cb(void *eloop_data, void *user_ctx)
+@@ -1311,2 +1317,5 @@ static void switch_chan_fallback_cb(void *eloop_data, void *user_ctx)
  
 +	/* keep the new channel through the restart, as CHAN_SWITCH does; on
 +	 * an ACS radio the setup would otherwise clear it and run ACS */
 +	iface->is_ch_switch_dfs = true;
  	hostapd_switch_channel_fallback(iface, freq_params);
-@@ -1335,2 +1341,3 @@ hostapd_switch_chan(struct ubus_context *ctx, struct ubus_object *obj,
+@@ -1335,2 +1344,3 @@ hostapd_switch_chan(struct ubus_context *ctx, struct ubus_object *obj,
  	u8 seg0 = 0, seg1 = 0;
 +	u32 vht_capab;
  	int ret = UBUS_STATUS_OK;
-@@ -1392,2 +1399,10 @@ hostapd_switch_chan(struct ubus_context *ctx, struct ubus_object *obj,
+@@ -1392,2 +1402,10 @@ hostapd_switch_chan(struct ubus_context *ctx, struct ubus_object *obj,
  
 +	/* the configured vht_capab has no [VHT160] below 160 MHz (#22436);
 +	 * hostapd_switch_channel() adds it for a switch to 160 MHz (patch 895),
@@ -184,11 +476,22 @@ index ea6bcba5f0..32533f214e 100644
 +		vht_capab |= VHT_CAP_SUPP_CHAN_WIDTH_160MHZ;
 +
  	hostapd_set_freq_params(&css.freq_params, iconf->hw_mode,
-@@ -1402,3 +1417,3 @@ hostapd_switch_chan(struct ubus_context *ctx, struct ubus_object *obj,
+@@ -1402,3 +1420,3 @@ hostapd_switch_chan(struct ubus_context *ctx, struct ubus_object *obj,
  				chwidth, seg0, seg1,
 -				iconf->vht_capab,
 +				vht_capab,
  				mode ? &mode->he_capab[IEEE80211_MODE_AP] :
+@@ -1420,2 +1438,5 @@ hostapd_switch_chan(struct ubus_context *ctx, struct ubus_object *obj,
+ 	freq_params = malloc(sizeof(*freq_params));
++	if (!freq_params)
++		return ret;
++
+ 	memcpy(freq_params, &css.freq_params, sizeof(*freq_params));
+@@ -1471,3 +1492,3 @@ hostapd_vendor_elements(struct ubus_context *ctx, struct ubus_object *obj,
+ 	if (elems == NULL)
+-		return 1;
++		return UBUS_STATUS_UNKNOWN_ERROR;
+ 
 diff --git a/package/network/utils/iw/Makefile b/package/network/utils/iw/Makefile
 index fceacf06f8..9e25c589d3 100644
 --- a/package/network/utils/iw/Makefile
@@ -207,6 +510,931 @@ index 64e9291f7d..76f316f430 100644
 -PACKAGE_DIR_ALL?=$(TOPDIR)/staging_dir/packages/$(BOARD)
 +PACKAGE_DIR_ALL?=$(if $(call qstrip,$(CONFIG_BINARY_FOLDER)),$(OUTPUT_DIR)/repository,$(TOPDIR)/staging_dir/packages/$(BOARD))
  BUILD_DIR:=$(BUILD_DIR_BASE)/$(TARGET_DIR_NAME)
+diff --git a/target/linux/generic/backport-6.18/500-v6.19-ksmbd-server-avoid-busy-polling-in-accept-loop.patch b/target/linux/generic/backport-6.18/500-v6.19-ksmbd-server-avoid-busy-polling-in-accept-loop.patch
+deleted file mode 100644
+index f31feb0047..0000000000
+--- a/target/linux/generic/backport-6.18/500-v6.19-ksmbd-server-avoid-busy-polling-in-accept-loop.patch
++++ /dev/null
+@@ -1,128 +0,0 @@
+-From 3316a8fc840d82fad5efcf76ad0ea3f76fdca209 Mon Sep 17 00:00:00 2001
+-From: Qingfang Deng <dqfext@gmail.com>
+-Date: Mon, 17 Nov 2025 16:59:00 +0800
+-Subject: [PATCH] ksmbd: server: avoid busy polling in accept loop
+-
+-The ksmbd listener thread was using busy waiting on a listening socket by
+-calling kernel_accept() with SOCK_NONBLOCK and retrying every 100ms on
+--EAGAIN. Since this thread is dedicated to accepting new connections,
+-there is no need for non-blocking mode.
+-
+-Switch to a blocking accept() call instead, allowing the thread to sleep
+-until a new connection arrives. This avoids unnecessary wakeups and CPU
+-usage. During teardown, call shutdown() on the listening socket so that
+-accept() returns -EINVAL and the thread exits cleanly.
+-
+-The socket release mutex is redundant because kthread_stop() blocks until
+-the listener thread returns, guaranteeing safe teardown ordering.
+-
+-Also remove sk_rcvtimeo and sk_sndtimeo assignments, which only caused
+-accept() to return -EAGAIN prematurely.
+-
+-Signed-off-by: Qingfang Deng <dqfext@gmail.com>
+-Reviewed-by: Stefan Metzmacher <metze@samba.org>
+-Acked-by: Namjae Jeon <linkinjeon@kernel.org>
+-Signed-off-by: Steve French <stfrench@microsoft.com>
+----
+- fs/smb/server/transport_tcp.c | 41 +++++------------------------------
+- 1 file changed, 6 insertions(+), 35 deletions(-)
+-
+---- a/fs/smb/server/transport_tcp.c
+-+++ b/fs/smb/server/transport_tcp.c
+-@@ -22,7 +22,6 @@ struct interface {
+- 	struct socket		*ksmbd_socket;
+- 	struct list_head	entry;
+- 	char			*name;
+--	struct mutex		sock_release_lock;
+- 	int			state;
+- };
+- 
+-@@ -57,19 +56,6 @@ static inline void ksmbd_tcp_reuseaddr(s
+- 	sock_set_reuseaddr(sock->sk);
+- }
+- 
+--static inline void ksmbd_tcp_rcv_timeout(struct socket *sock, s64 secs)
+--{
+--	if (secs && secs < MAX_SCHEDULE_TIMEOUT / HZ - 1)
+--		WRITE_ONCE(sock->sk->sk_rcvtimeo, secs * HZ);
+--	else
+--		WRITE_ONCE(sock->sk->sk_rcvtimeo, MAX_SCHEDULE_TIMEOUT);
+--}
+--
+--static inline void ksmbd_tcp_snd_timeout(struct socket *sock, s64 secs)
+--{
+--	sock_set_sndtimeo(sock->sk, secs);
+--}
+--
+- static struct tcp_transport *alloc_transport(struct socket *client_sk)
+- {
+- 	struct tcp_transport *t;
+-@@ -239,20 +225,14 @@ static int ksmbd_kthread_fn(void *p)
+- 	unsigned int max_ip_conns;
+- 
+- 	while (!kthread_should_stop()) {
+--		mutex_lock(&iface->sock_release_lock);
+- 		if (!iface->ksmbd_socket) {
+--			mutex_unlock(&iface->sock_release_lock);
+- 			break;
+- 		}
+--		ret = kernel_accept(iface->ksmbd_socket, &client_sk,
+--				    SOCK_NONBLOCK);
+--		mutex_unlock(&iface->sock_release_lock);
+--		if (ret) {
+--			if (ret == -EAGAIN)
+--				/* check for new connections every 100 msecs */
+--				schedule_timeout_interruptible(HZ / 10);
+-+		ret = kernel_accept(iface->ksmbd_socket, &client_sk, 0);
+-+		if (ret == -EINVAL)
+-+			break;
+-+		if (ret)
+- 			continue;
+--		}
+- 
+- 		if (!server_conf.max_ip_connections)
+- 			goto skip_max_ip_conns_limit;
+-@@ -472,10 +452,6 @@ static void tcp_destroy_socket(struct so
+- 	if (!ksmbd_socket)
+- 		return;
+- 
+--	/* set zero to timeout */
+--	ksmbd_tcp_rcv_timeout(ksmbd_socket, 0);
+--	ksmbd_tcp_snd_timeout(ksmbd_socket, 0);
+--
+- 	ret = kernel_sock_shutdown(ksmbd_socket, SHUT_RDWR);
+- 	if (ret)
+- 		pr_err("Failed to shutdown socket: %d\n", ret);
+-@@ -546,9 +522,6 @@ static int create_socket(struct interfac
+- 		goto out_error;
+- 	}
+- 
+--	ksmbd_socket->sk->sk_rcvtimeo = KSMBD_TCP_RECV_TIMEOUT;
+--	ksmbd_socket->sk->sk_sndtimeo = KSMBD_TCP_SEND_TIMEOUT;
+--
+- 	ret = kernel_listen(ksmbd_socket, KSMBD_SOCKET_BACKLOG);
+- 	if (ret) {
+- 		pr_err("Port listen() error: %d\n", ret);
+-@@ -627,12 +600,11 @@ static int ksmbd_netdev_event(struct not
+- 		if (iface && iface->state == IFACE_STATE_CONFIGURED) {
+- 			ksmbd_debug(CONN, "netdev-down event: netdev(%s) is going down\n",
+- 					iface->name);
+-+			kernel_sock_shutdown(iface->ksmbd_socket, SHUT_RDWR);
+- 			tcp_stop_kthread(iface->ksmbd_kthread);
+- 			iface->ksmbd_kthread = NULL;
+--			mutex_lock(&iface->sock_release_lock);
+--			tcp_destroy_socket(iface->ksmbd_socket);
+-+			sock_release(iface->ksmbd_socket);
+- 			iface->ksmbd_socket = NULL;
+--			mutex_unlock(&iface->sock_release_lock);
+- 
+- 			iface->state = IFACE_STATE_DOWN;
+- 			break;
+-@@ -695,7 +667,6 @@ static struct interface *alloc_iface(cha
+- 	iface->name = ifname;
+- 	iface->state = IFACE_STATE_DOWN;
+- 	list_add(&iface->entry, &iface_list);
+--	mutex_init(&iface->sock_release_lock);
+- 	return iface;
+- }
+- 
+diff --git a/target/linux/generic/backport-6.18/502-v7.3-smb-server-fix-signing-multi-iov-response.patch b/target/linux/generic/backport-6.18/502-v7.3-smb-server-fix-signing-multi-iov-response.patch
+index b34cd9b024..cdbb3d8f42 100644
+--- a/target/linux/generic/backport-6.18/502-v7.3-smb-server-fix-signing-multi-iov-response.patch
++++ b/target/linux/generic/backport-6.18/502-v7.3-smb-server-fix-signing-multi-iov-response.patch
+@@ -27,3 +27,3 @@ Signed-off-by: Steve French <stfrench@microsoft.com>
+ +++ b/fs/smb/server/smb2pdu.c
+-@@ -9262,6 +9262,39 @@ int smb2_check_sign_req(struct ksmbd_wor
++@@ -9346,6 +9346,39 @@ int smb2_check_sign_req(struct ksmbd_wor
+  }
+@@ -67,3 +67,3 @@ Signed-off-by: Steve French <stfrench@microsoft.com>
+   *
+-@@ -9271,18 +9304,13 @@ void smb2_set_sign_rsp(struct ksmbd_work
++@@ -9355,18 +9388,13 @@ void smb2_set_sign_rsp(struct ksmbd_work
+  	struct smb2_hdr *hdr;
+@@ -88,3 +88,3 @@ Signed-off-by: Steve French <stfrench@microsoft.com>
+  			    signature);
+-@@ -9361,7 +9389,7 @@ void smb3_set_sign_rsp(struct ksmbd_work
++@@ -9445,7 +9473,7 @@ void smb3_set_sign_rsp(struct ksmbd_work
+  	struct channel *chann;
+@@ -97,3 +97,3 @@ Signed-off-by: Steve French <stfrench@microsoft.com>
+  	hdr = ksmbd_resp_buf_curr(work);
+-@@ -9383,12 +9411,7 @@ void smb3_set_sign_rsp(struct ksmbd_work
++@@ -9467,12 +9495,7 @@ void smb3_set_sign_rsp(struct ksmbd_work
+  	hdr->Flags |= SMB2_FLAGS_SIGNED;
+diff --git a/target/linux/generic/backport-6.18/503-02-v7.3-ksmbd-keep-tcp-timers-alive-for-kernel-sockets.patch b/target/linux/generic/backport-6.18/503-02-v7.3-ksmbd-keep-tcp-timers-alive-for-kernel-sockets.patch
+index 0e83ee7eb8..8e6707d32e 100644
+--- a/target/linux/generic/backport-6.18/503-02-v7.3-ksmbd-keep-tcp-timers-alive-for-kernel-sockets.patch
++++ b/target/linux/generic/backport-6.18/503-02-v7.3-ksmbd-keep-tcp-timers-alive-for-kernel-sockets.patch
+@@ -29,3 +29,3 @@ Signed-off-by: Namjae Jeon <linkinjeon@kernel.org>
+ +++ b/fs/smb/server/transport_tcp.c
+-@@ -522,6 +522,12 @@ static int create_socket(struct interfac
++@@ -530,6 +530,12 @@ static int create_socket(struct interfac
+  		goto out_error;
+diff --git a/target/linux/generic/backport-6.18/504-v7.3-ksmbd-fix-listener-task-lifetime-on-netdev-events.patch b/target/linux/generic/backport-6.18/504-v7.3-ksmbd-fix-listener-task-lifetime-on-netdev-events.patch
+deleted file mode 100644
+index cccabc91dc..0000000000
+--- a/target/linux/generic/backport-6.18/504-v7.3-ksmbd-fix-listener-task-lifetime-on-netdev-events.patch
++++ /dev/null
+@@ -1,102 +0,0 @@
+-From a506290f59e1c6ce9ac0a13158640bb8fee93471 Mon Sep 17 00:00:00 2001
+-From: Namjae Jeon <linkinjeon@kernel.org>
+-Date: Fri, 28 Aug 2026 09:24:49 +0900
+-Subject: [PATCH] ksmbd: fix listener task lifetime on netdev events
+-
+-The listener thread exits when its listening socket is shutdown. The
+-netdevice notifier shuts down the socket before calling kthread_stop(), so
+-the task_struct can be freed before kthread_stop() gets its reference.
+-
+-Create the listener in a stopped state and hold an extra task_struct
+-reference until kthread_stop_put() completes. Also stop and release
+-listeners before freeing their interface records during TCP teardown.
+-
+-Fixes: 3316a8fc840d ("ksmbd: server: avoid busy polling in accept loop")
+-Reported-by: Farhad Alemi <farhad.alemi@berkeley.edu>
+-Signed-off-by: Namjae Jeon <linkinjeon@kernel.org>
+----
+- fs/smb/server/transport_tcp.c | 36 ++++++++++++++++++++++++++---------
+- 1 file changed, 27 insertions(+), 9 deletions(-)
+-
+---- a/fs/smb/server/transport_tcp.c
+-+++ b/fs/smb/server/transport_tcp.c
+-@@ -39,6 +39,7 @@ struct tcp_transport {
+- static const struct ksmbd_transport_ops ksmbd_tcp_transport_ops;
+- 
+- static void tcp_stop_kthread(struct task_struct *kthread);
+-+static void ksmbd_tcp_stop_listener(struct interface *iface);
+- static struct interface *alloc_iface(char *ifname);
+- static void ksmbd_tcp_disconnect(struct ksmbd_transport *t);
+- 
+-@@ -321,13 +322,20 @@ static int ksmbd_tcp_run_kthread(struct
+- 	int rc;
+- 	struct task_struct *kthread;
+- 
+--	kthread = kthread_run(ksmbd_kthread_fn, (void *)iface, "ksmbd-%s",
+--			      iface->name);
+-+	kthread = kthread_create(ksmbd_kthread_fn, (void *)iface, "ksmbd-%s",
+-+				 iface->name);
+- 	if (IS_ERR(kthread)) {
+- 		rc = PTR_ERR(kthread);
+- 		return rc;
+- 	}
+-+
+-+	/*
+-+	 * The listener can exit after its socket is shutdown, so keep the
+-+	 * task_struct alive until the caller has stopped it.
+-+	 */
+-+	get_task_struct(kthread);
+- 	iface->ksmbd_kthread = kthread;
+-+	wake_up_process(kthread);
+- 
+- 	return 0;
+- }
+-@@ -606,12 +614,7 @@ static int ksmbd_netdev_event(struct not
+- 		if (iface && iface->state == IFACE_STATE_CONFIGURED) {
+- 			ksmbd_debug(CONN, "netdev-down event: netdev(%s) is going down\n",
+- 					iface->name);
+--			kernel_sock_shutdown(iface->ksmbd_socket, SHUT_RDWR);
+--			tcp_stop_kthread(iface->ksmbd_kthread);
+--			iface->ksmbd_kthread = NULL;
+--			sock_release(iface->ksmbd_socket);
+--			iface->ksmbd_socket = NULL;
+--
+-+			ksmbd_tcp_stop_listener(iface);
+- 			iface->state = IFACE_STATE_DOWN;
+- 			break;
+- 		}
+-@@ -639,11 +642,25 @@ static void tcp_stop_kthread(struct task
+- 	if (!kthread)
+- 		return;
+- 
+--	ret = kthread_stop(kthread);
+-+	ret = kthread_stop_put(kthread);
+- 	if (ret)
+- 		pr_err("failed to stop forker thread\n");
+- }
+- 
+-+static void ksmbd_tcp_stop_listener(struct interface *iface)
+-+{
+-+	if (iface->ksmbd_socket)
+-+		kernel_sock_shutdown(iface->ksmbd_socket, SHUT_RDWR);
+-+
+-+	tcp_stop_kthread(iface->ksmbd_kthread);
+-+	iface->ksmbd_kthread = NULL;
+-+
+-+	if (iface->ksmbd_socket) {
+-+		sock_release(iface->ksmbd_socket);
+-+		iface->ksmbd_socket = NULL;
+-+	}
+-+}
+-+
+- void ksmbd_tcp_destroy(void)
+- {
+- 	struct interface *iface, *tmp;
+-@@ -651,6 +668,7 @@ void ksmbd_tcp_destroy(void)
+- 	unregister_netdevice_notifier(&ksmbd_netdev_notifier);
+- 
+- 	list_for_each_entry_safe(iface, tmp, &iface_list, entry) {
+-+		ksmbd_tcp_stop_listener(iface);
+- 		list_del(&iface->entry);
+- 		kfree(iface->name);
+- 		kfree(iface);
+diff --git a/target/linux/generic/backport-6.18/601-v7.1-net-add-netdev_from_priv-helper.patch b/target/linux/generic/backport-6.18/601-v7.1-net-add-netdev_from_priv-helper.patch
+index 5011e0567e..ac565ae69d 100644
+--- a/target/linux/generic/backport-6.18/601-v7.1-net-add-netdev_from_priv-helper.patch
++++ b/target/linux/generic/backport-6.18/601-v7.1-net-add-netdev_from_priv-helper.patch
+@@ -17,3 +17,3 @@ Signed-off-by: Jakub Kicinski <kuba@kernel.org>
+ +++ b/include/linux/netdevice.h
+-@@ -2755,6 +2755,17 @@ static inline void *netdev_priv(const st
++@@ -2775,6 +2775,17 @@ static inline void *netdev_priv(const st
+  	return (void *)dev->priv;
+diff --git a/target/linux/generic/backport-6.18/650-v7.2-net-pppoe-implement-GRO-GSO-support.patch b/target/linux/generic/backport-6.18/650-v7.2-net-pppoe-implement-GRO-GSO-support.patch
+index 35838db267..5025e76e67 100644
+--- a/target/linux/generic/backport-6.18/650-v7.2-net-pppoe-implement-GRO-GSO-support.patch
++++ b/target/linux/generic/backport-6.18/650-v7.2-net-pppoe-implement-GRO-GSO-support.patch
+@@ -43,3 +43,3 @@ Signed-off-by: Paolo Abeni <pabeni@redhat.com>
+  	ph = pppoe_hdr(skb);
+-@@ -1177,6 +1178,160 @@ static struct pernet_operations pppoe_ne
++@@ -1185,6 +1186,160 @@ static struct pernet_operations pppoe_ne
+  	.size = sizeof(struct pppoe_net),
+@@ -204,3 +204,3 @@ Signed-off-by: Paolo Abeni <pabeni@redhat.com>
+  	int err;
+-@@ -1193,6 +1348,8 @@ static int __init pppoe_init(void)
++@@ -1201,6 +1356,8 @@ static int __init pppoe_init(void)
+  	if (err)
+@@ -213,3 +213,3 @@ Signed-off-by: Paolo Abeni <pabeni@redhat.com>
+  	register_netdevice_notifier(&pppoe_notifier);
+-@@ -1212,6 +1369,8 @@ static void __exit pppoe_exit(void)
++@@ -1220,6 +1377,8 @@ static void __exit pppoe_exit(void)
+  	unregister_netdevice_notifier(&pppoe_notifier);
+diff --git a/target/linux/generic/backport-6.18/706-01-v7.3-net-pass-net_device_path_ctx-to-dev_fill_forward_path.patch b/target/linux/generic/backport-6.18/706-01-v7.3-net-pass-net_device_path_ctx-to-dev_fill_forward_path.patch
+index 4a964e84ca..5a09e6b922 100644
+--- a/target/linux/generic/backport-6.18/706-01-v7.3-net-pass-net_device_path_ctx-to-dev_fill_forward_path.patch
++++ b/target/linux/generic/backport-6.18/706-01-v7.3-net-pass-net_device_path_ctx-to-dev_fill_forward_path.patch
+@@ -80,3 +80,3 @@ Signed-off-by: Pablo Neira Ayuso <pablo@netfilter.org>
+ +++ b/include/linux/netdevice.h
+-@@ -3360,7 +3360,7 @@ void dev_remove_offload(struct packet_of
++@@ -3380,7 +3380,7 @@ void dev_remove_offload(struct packet_of
+  
+diff --git a/target/linux/generic/backport-6.18/706-02-v7.3-netfilter-flowtable-restore-ieee80211-forward-path.patch b/target/linux/generic/backport-6.18/706-02-v7.3-netfilter-flowtable-restore-ieee80211-forward-path.patch
+index 4e5e1181df..4763a9c4ef 100644
+--- a/target/linux/generic/backport-6.18/706-02-v7.3-netfilter-flowtable-restore-ieee80211-forward-path.patch
++++ b/target/linux/generic/backport-6.18/706-02-v7.3-netfilter-flowtable-restore-ieee80211-forward-path.patch
+@@ -36,3 +36,3 @@ Signed-off-by: Pablo Neira Ayuso <pablo@netfilter.org>
+ +++ b/include/linux/netdevice.h
+-@@ -878,6 +878,7 @@ enum net_device_path_type {
++@@ -880,6 +880,7 @@ enum net_device_path_type {
+  	DEV_PATH_PPPOE,
+@@ -44,3 +44,3 @@ Signed-off-by: Pablo Neira Ayuso <pablo@netfilter.org>
+  struct net_device_path {
+-@@ -930,6 +931,8 @@ struct net_device_path_ctx {
++@@ -932,6 +933,8 @@ struct net_device_path_ctx {
+  		u16		id;
+diff --git a/target/linux/generic/backport-6.18/706-04-v7.3-netfilter-flowtable-use-the-vlan-id-not-the-full-tci.patch b/target/linux/generic/backport-6.18/706-04-v7.3-netfilter-flowtable-use-the-vlan-id-not-the-full-tci.patch
+deleted file mode 100644
+index 4424f7e1ae..0000000000
+--- a/target/linux/generic/backport-6.18/706-04-v7.3-netfilter-flowtable-use-the-vlan-id-not-the-full-tci.patch
++++ /dev/null
+@@ -1,56 +0,0 @@
+-From c203ecf905745d979de5df28fa657121f2e9342d Mon Sep 17 00:00:00 2001
+-From: Shuangfeng He <huangya90@gmail.com>
+-Date: Fri, 2 Oct 2026 16:42:53 +0800
+-Subject: [PATCH] netfilter: flowtable: use the vlan id, not the full tci, in
+- the tuple key
+-
+-nf_flow_tuple_encap() stores the skb vlan tag in the encap tuple id
+-using skb_vlan_tag_get(), which returns the unmasked TCI including
+-the 3 PCP priority bits. The flowtable entry, however, is programmed
+-by nf_dev_path_info() with vlan_dev_vlan_id(), a plain 12-bit VID.
+-
+-When a NIC delivers RX vlan offload skbs with a non-zero priority
+-(an RTL9617C EPON ONU was observed handing over vid 818 skbs with
+-tci 0x6332, PCP 3), the runtime lookup key never matches the
+-programmed entry, so every packet misses the flow table and
+-software flow offload is silently defeated.
+-
+-Mask both parse sites to the 12-bit VID so the lookup key matches
+-for any priority. The in-header variant has the same problem for
+-frames received with PCP != 0 on a non-offload path.
+-
+-The egress side is unaffected: nf_flow_encap_push() restores tags
+-from the programmed tuple id, which never carried priority bits.
+-
+-Measured on an RTL9617C ONU (PPPoE over VLAN 818 WAN, NATed 6-flow
+-download over a 1G EPON line), before -> after:
+-
+-  download throughput      377 Mbps -> 936 Mbps
+-  CPU0 %soft at that rate    91.5%  ->  70.9%
+-
+-Fixes: 4cd91f7c290f ("netfilter: flowtable: add vlan support")
+-Signed-off-by: Shuangfeng He <huangya90@gmail.com>
+-Signed-off-by: Pablo Neira Ayuso <pablo@netfilter.org>
+----
+- net/netfilter/nf_flow_table_ip.c | 4 ++--
+- 1 file changed, 2 insertions(+), 2 deletions(-)
+-
+---- a/net/netfilter/nf_flow_table_ip.c
+-+++ b/net/netfilter/nf_flow_table_ip.c
+-@@ -150,14 +150,14 @@ static void nf_flow_tuple_encap(struct s
+- 	int i = 0;
+- 
+- 	if (skb_vlan_tag_present(skb)) {
+--		tuple->encap[i].id = skb_vlan_tag_get(skb);
+-+		tuple->encap[i].id = skb_vlan_tag_get_id(skb);
+- 		tuple->encap[i].proto = skb->vlan_proto;
+- 		i++;
+- 	}
+- 	switch (skb->protocol) {
+- 	case htons(ETH_P_8021Q):
+- 		veth = (struct vlan_ethhdr *)skb_mac_header(skb);
+--		tuple->encap[i].id = ntohs(veth->h_vlan_TCI);
+-+		tuple->encap[i].id = ntohs(veth->h_vlan_TCI) & VLAN_VID_MASK;
+- 		tuple->encap[i].proto = skb->protocol;
+- 		break;
+- 	case htons(ETH_P_PPP_SES):
+diff --git a/target/linux/generic/backport-6.18/802-01-v7.4-net-usb-lan78xx-register-the-PHY-interrupt-with-the-.patch b/target/linux/generic/backport-6.18/802-01-v7.4-net-usb-lan78xx-register-the-PHY-interrupt-with-the-.patch
+index ce894d4f49..ce2fadf533 100644
+--- a/target/linux/generic/backport-6.18/802-01-v7.4-net-usb-lan78xx-register-the-PHY-interrupt-with-the-.patch
++++ b/target/linux/generic/backport-6.18/802-01-v7.4-net-usb-lan78xx-register-the-PHY-interrupt-with-the-.patch
+@@ -32,3 +32,3 @@ Signed-off-by: Jakub Kicinski <kuba@kernel.org>
+ +++ b/drivers/net/usb/lan78xx.c
+-@@ -2897,6 +2897,7 @@ static int lan78xx_phy_init(struct lan78
++@@ -2909,6 +2909,7 @@ static int lan78xx_phy_init(struct lan78
+  		phydev->irq = dev->domain_data.phyirq;
+diff --git a/target/linux/generic/backport-6.18/932-v7.1-crypto-tcrypt-clamp-num_mb-to-avoid-divide-by-zero.patch b/target/linux/generic/backport-6.18/932-v7.1-crypto-tcrypt-clamp-num_mb-to-avoid-divide-by-zero.patch
+index 500b006ff8..b9e3196c5d 100644
+--- a/target/linux/generic/backport-6.18/932-v7.1-crypto-tcrypt-clamp-num_mb-to-avoid-divide-by-zero.patch
++++ b/target/linux/generic/backport-6.18/932-v7.1-crypto-tcrypt-clamp-num_mb-to-avoid-divide-by-zero.patch
+@@ -24,3 +24,3 @@ Signed-off-by: Herbert Xu <herbert@gondor.apana.org.au>
+ +++ b/crypto/tcrypt.c
+-@@ -2820,6 +2820,11 @@ static int __init tcrypt_mod_init(void)
++@@ -2840,6 +2840,11 @@ static int __init tcrypt_mod_init(void)
+  			goto err_free_tv;
+diff --git a/target/linux/generic/backport-6.18/933-v7.1-crypto-tcrypt-stop-ahash-speed-tests-when-setkey-fai.patch b/target/linux/generic/backport-6.18/933-v7.1-crypto-tcrypt-stop-ahash-speed-tests-when-setkey-fai.patch
+index 2d1ef0aa52..b99a556142 100644
+--- a/target/linux/generic/backport-6.18/933-v7.1-crypto-tcrypt-stop-ahash-speed-tests-when-setkey-fai.patch
++++ b/target/linux/generic/backport-6.18/933-v7.1-crypto-tcrypt-stop-ahash-speed-tests-when-setkey-fai.patch
+@@ -19,3 +19,3 @@ Signed-off-by: Herbert Xu <herbert@gondor.apana.org.au>
+ +++ b/crypto/tcrypt.c
+-@@ -911,8 +911,14 @@ static void test_ahash_speed_common(cons
++@@ -929,8 +929,14 @@ static void test_ahash_speed_common(cons
+  			break;
+diff --git a/target/linux/generic/config-6.18 b/target/linux/generic/config-6.18
+index d0cf2ac860..77c77ecdd3 100644
+--- a/target/linux/generic/config-6.18
++++ b/target/linux/generic/config-6.18
+@@ -5737,2 +5737,3 @@ CONFIG_RTC_HCTOSYS=y
+ CONFIG_RTC_HCTOSYS_DEVICE="rtc0"
++# CONFIG_RTC_HCTOSYS_TIME32_LIMIT is not set
+ CONFIG_RTC_INTF_DEV=y
+diff --git a/target/linux/generic/hack-6.18/200-tools_portability.patch b/target/linux/generic/hack-6.18/200-tools_portability.patch
+index b682312f71..aa5a364124 100644
+--- a/target/linux/generic/hack-6.18/200-tools_portability.patch
++++ b/target/linux/generic/hack-6.18/200-tools_portability.patch
+@@ -29,3 +29,3 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
+ +++ b/tools/include/linux/types.h
+-@@ -58,6 +58,7 @@ typedef unsigned long long	ullong;
++@@ -63,6 +63,7 @@ typedef unsigned long long	ullong;
+  #define __user
+diff --git a/target/linux/generic/hack-6.18/205-kconfig-abort-configuration-on-unset-symbol.patch b/target/linux/generic/hack-6.18/205-kconfig-abort-configuration-on-unset-symbol.patch
+index 780320e512..a4f3d48f71 100644
+--- a/target/linux/generic/hack-6.18/205-kconfig-abort-configuration-on-unset-symbol.patch
++++ b/target/linux/generic/hack-6.18/205-kconfig-abort-configuration-on-unset-symbol.patch
+@@ -21,3 +21,3 @@ Signed-off-by: David Bauer <mail@david-bauer.net>
+ +++ b/scripts/kconfig/conf.c
+-@@ -310,6 +310,9 @@ static int conf_askvalue(struct symbol *
++@@ -324,6 +324,9 @@ static int conf_askvalue(struct symbol *
+  		}
+@@ -31,3 +31,3 @@ Signed-off-by: David Bauer <mail@david-bauer.net>
+  		break;
+-@@ -485,6 +488,9 @@ static void conf_choice(struct menu *men
++@@ -502,6 +505,9 @@ static void conf_choice(struct menu *men
+  			}
+diff --git a/target/linux/generic/hack-6.18/402-mtd-blktrans-call-add-disks-after-mtd-device.patch b/target/linux/generic/hack-6.18/402-mtd-blktrans-call-add-disks-after-mtd-device.patch
+index e4834ad16e..9c29f2eef0 100644
+--- a/target/linux/generic/hack-6.18/402-mtd-blktrans-call-add-disks-after-mtd-device.patch
++++ b/target/linux/generic/hack-6.18/402-mtd-blktrans-call-add-disks-after-mtd-device.patch
+@@ -27,3 +27,3 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
+ +++ b/drivers/mtd/mtd_blkdevs.c
+-@@ -379,19 +379,8 @@ int add_mtd_blktrans_dev(struct mtd_blkt
++@@ -384,19 +384,8 @@ int add_mtd_blktrans_dev(struct mtd_blkt
+  	if (new->readonly)
+@@ -47,3 +47,3 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
+  out_kfree_tag_set:
+-@@ -401,6 +390,35 @@ out_list_del:
++@@ -406,6 +395,35 @@ out_list_del:
+  	return ret;
+diff --git a/target/linux/generic/hack-6.18/661-kernel-ct-size-the-hashtable-more-adequately.patch b/target/linux/generic/hack-6.18/661-kernel-ct-size-the-hashtable-more-adequately.patch
+index a3fe0e0d9f..6343fbf4e6 100644
+--- a/target/linux/generic/hack-6.18/661-kernel-ct-size-the-hashtable-more-adequately.patch
++++ b/target/linux/generic/hack-6.18/661-kernel-ct-size-the-hashtable-more-adequately.patch
+@@ -16,3 +16,3 @@ Signed-off-by: Rui Salvaterra <rsalvaterra@gmail.com>
+ +++ b/net/netfilter/nf_conntrack_core.c
+-@@ -2633,7 +2633,7 @@ int nf_conntrack_init_start(void)
++@@ -2638,7 +2638,7 @@ int nf_conntrack_init_start(void)
+  
+diff --git a/target/linux/generic/hack-6.18/721-net-add-packet-mangeling.patch b/target/linux/generic/hack-6.18/721-net-add-packet-mangeling.patch
+index 5dc1baa0ae..deaa85f9fa 100644
+--- a/target/linux/generic/hack-6.18/721-net-add-packet-mangeling.patch
++++ b/target/linux/generic/hack-6.18/721-net-add-packet-mangeling.patch
+@@ -21,3 +21,3 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
+ +++ b/include/linux/netdevice.h
+-@@ -1750,6 +1750,7 @@ enum netdev_priv_flags {
++@@ -1766,6 +1766,7 @@ enum netdev_priv_flags {
+  	IFF_L3MDEV_RX_HANDLER		= 1<<29,
+@@ -29,3 +29,3 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
+  /* Specifies the type of the struct net_device::ml_priv pointer */
+-@@ -2252,6 +2253,11 @@ struct net_device {
++@@ -2270,6 +2271,11 @@ struct net_device {
+  	const struct tlsdev_ops *tlsdev_ops;
+@@ -41,3 +41,3 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
+  
+-@@ -2328,6 +2334,10 @@ struct net_device {
++@@ -2348,6 +2354,10 @@ struct net_device {
+  	struct psp_dev __rcu	*psp_dev;
+@@ -99,3 +99,3 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
+ +++ b/net/core/dev.c
+-@@ -3889,6 +3889,11 @@ static int xmit_one(struct sk_buff *skb,
++@@ -3897,6 +3897,11 @@ static int xmit_one(struct sk_buff *skb,
+  	if (dev_nit_active_rcu(dev))
+diff --git a/target/linux/generic/hack-6.18/901-debloat_sock_diag.patch b/target/linux/generic/hack-6.18/901-debloat_sock_diag.patch
+index b788353232..36f3609290 100644
+--- a/target/linux/generic/hack-6.18/901-debloat_sock_diag.patch
++++ b/target/linux/generic/hack-6.18/901-debloat_sock_diag.patch
+@@ -85,3 +85,3 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
+  INDIRECT_CALLABLE_DECLARE(struct dst_entry *ipv4_dst_check(struct dst_entry *,
+-@@ -2403,9 +2420,11 @@ static void __sk_free(struct sock *sk)
++@@ -2404,9 +2421,11 @@ static void __sk_free(struct sock *sk)
+  	if (likely(sk->sk_net_refcnt))
+diff --git a/target/linux/generic/hack-6.18/902-debloat_proc.patch b/target/linux/generic/hack-6.18/902-debloat_proc.patch
+index 113abdfa2f..8778fd8804 100644
+--- a/target/linux/generic/hack-6.18/902-debloat_proc.patch
++++ b/target/linux/generic/hack-6.18/902-debloat_proc.patch
+@@ -333,3 +333,3 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
+ +++ b/net/core/sock.c
+-@@ -4362,6 +4362,8 @@ static __net_initdata struct pernet_oper
++@@ -4363,6 +4363,8 @@ static __net_initdata struct pernet_oper
+  
+diff --git a/target/linux/generic/hack-6.18/904-debloat_dma_buf.patch b/target/linux/generic/hack-6.18/904-debloat_dma_buf.patch
+index 9f1d7267ca..757ae876fe 100644
+--- a/target/linux/generic/hack-6.18/904-debloat_dma_buf.patch
++++ b/target/linux/generic/hack-6.18/904-debloat_dma_buf.patch
+@@ -69,3 +69,3 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
+ +++ b/kernel/sched/core.c
+-@@ -4445,6 +4445,7 @@ int wake_up_state(struct task_struct *p,
++@@ -4423,6 +4423,7 @@ int wake_up_state(struct task_struct *p,
+  {
+diff --git a/target/linux/generic/hack-6.18/911-kobject_add_broadcast_uevent.patch b/target/linux/generic/hack-6.18/911-kobject_add_broadcast_uevent.patch
+index df160baff6..ffce7b2d57 100644
+--- a/target/linux/generic/hack-6.18/911-kobject_add_broadcast_uevent.patch
++++ b/target/linux/generic/hack-6.18/911-kobject_add_broadcast_uevent.patch
+@@ -32,3 +32,3 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
+ +++ b/lib/kobject_uevent.c
+-@@ -699,6 +699,43 @@ int add_uevent_var(struct kobj_uevent_en
++@@ -702,6 +702,43 @@ int add_uevent_var(struct kobj_uevent_en
+  EXPORT_SYMBOL_GPL(add_uevent_var);
+diff --git a/target/linux/generic/hack-6.18/940-kbuild-extract-modules-builtin-modinfo-from-vmlinux_o.patch b/target/linux/generic/hack-6.18/940-kbuild-extract-modules-builtin-modinfo-from-vmlinux_o.patch
+index 1d5c65875d..82404fd571 100644
+--- a/target/linux/generic/hack-6.18/940-kbuild-extract-modules-builtin-modinfo-from-vmlinux_o.patch
++++ b/target/linux/generic/hack-6.18/940-kbuild-extract-modules-builtin-modinfo-from-vmlinux_o.patch
+@@ -20,4 +20,4 @@ Signed-off-by: Mieczyslaw Nalewaj <namiltd@yahoo.com>
+ +++ b/scripts/Makefile.vmlinux
+-@@ -119,7 +119,7 @@ quiet_cmd_modules_builtin_modinfo = GEN
+- OBJCOPYFLAGS_modules.builtin.modinfo := -j .modinfo -O binary
++@@ -103,7 +103,7 @@ quiet_cmd_modules_builtin_modinfo = GEN
++       cmd_modules_builtin_modinfo = $(OBJCOPY) -O binary -j .modinfo --dump-section .modinfo=$@ $< /dev/null
+  
+diff --git a/target/linux/generic/kernel-6.18 b/target/linux/generic/kernel-6.18
+index 82b30ac327..0ea1b53be8 100644
+--- a/target/linux/generic/kernel-6.18
++++ b/target/linux/generic/kernel-6.18
+@@ -1,2 +1,2 @@
+-LINUX_VERSION-6.18 = .64
+-LINUX_KERNEL_HASH-6.18.64 = 020d45510c539972e6f14c5c71566878d3b7ef56fb082b3e09134f2ebaade562
++LINUX_VERSION-6.18 = .65
++LINUX_KERNEL_HASH-6.18.65 = c92606f956f09dc50b5a0e2af9e86763fce27ada1647de97f8d1ac8cfc95801d
+diff --git a/target/linux/generic/pending-6.18/454-block-add-support-for-notifications.patch b/target/linux/generic/pending-6.18/454-block-add-support-for-notifications.patch
+index b537bff359..64016df143 100644
+--- a/target/linux/generic/pending-6.18/454-block-add-support-for-notifications.patch
++++ b/target/linux/generic/pending-6.18/454-block-add-support-for-notifications.patch
+@@ -151,3 +151,3 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
+ +++ b/include/linux/blkdev.h
+-@@ -1871,4 +1871,12 @@ static inline int bio_split_rw_at(struct
++@@ -1876,4 +1876,12 @@ static inline int bio_split_rw_at(struct
+  
+diff --git a/target/linux/generic/pending-6.18/455-block-add-new-genhd-flag-GENHD_FL_NVMEM.patch b/target/linux/generic/pending-6.18/455-block-add-new-genhd-flag-GENHD_FL_NVMEM.patch
+index 4f9a26fd16..6ca1f2059d 100644
+--- a/target/linux/generic/pending-6.18/455-block-add-new-genhd-flag-GENHD_FL_NVMEM.patch
++++ b/target/linux/generic/pending-6.18/455-block-add-new-genhd-flag-GENHD_FL_NVMEM.patch
+@@ -15,3 +15,3 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
+ +++ b/include/linux/blkdev.h
+-@@ -82,11 +82,13 @@ struct partition_meta_info {
++@@ -83,11 +83,13 @@ struct partition_meta_info {
+   * ``GENHD_FL_NO_PART``: partition support is disabled.  The kernel will not
+diff --git a/target/linux/generic/pending-6.18/640-net-bridge-fix-switchdev-host-mdb-entry-updates.patch b/target/linux/generic/pending-6.18/640-net-bridge-fix-switchdev-host-mdb-entry-updates.patch
+index cab539833b..d2785a3bdb 100644
+--- a/target/linux/generic/pending-6.18/640-net-bridge-fix-switchdev-host-mdb-entry-updates.patch
++++ b/target/linux/generic/pending-6.18/640-net-bridge-fix-switchdev-host-mdb-entry-updates.patch
+@@ -22,3 +22,3 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
+ +++ b/net/bridge/br_switchdev.c
+-@@ -575,10 +575,18 @@ static void br_switchdev_host_mdb(struct
++@@ -590,10 +590,18 @@ static void br_switchdev_host_mdb(struct
+  				  struct net_bridge_mdb_entry *mp, int type)
+diff --git a/target/linux/generic/pending-6.18/642-net-bridge-switchdev-add-br_switchdev_fdb_find_port.patch b/target/linux/generic/pending-6.18/642-net-bridge-switchdev-add-br_switchdev_fdb_find_port.patch
+index 93e4f6895f..43f1fa3ce7 100644
+--- a/target/linux/generic/pending-6.18/642-net-bridge-switchdev-add-br_switchdev_fdb_find_port.patch
++++ b/target/linux/generic/pending-6.18/642-net-bridge-switchdev-add-br_switchdev_fdb_find_port.patch
+@@ -19,3 +19,3 @@ Signed-off-by: Julius Bairaktaris <julius@bairaktaris.de>
+ +++ b/include/linux/if_bridge.h
+-@@ -172,6 +172,19 @@ static inline int br_mst_get_state(const
++@@ -201,6 +201,19 @@ static inline int br_mst_get_state(const
+  }
+diff --git a/target/linux/generic/pending-6.18/670-ipv6-allow-rejecting-with-source-address-failed-policy.patch b/target/linux/generic/pending-6.18/670-ipv6-allow-rejecting-with-source-address-failed-policy.patch
+index 1535b34914..7446fd9a1d 100644
+--- a/target/linux/generic/pending-6.18/670-ipv6-allow-rejecting-with-source-address-failed-policy.patch
++++ b/target/linux/generic/pending-6.18/670-ipv6-allow-rejecting-with-source-address-failed-policy.patch
+@@ -159,3 +159,3 @@ Signed-off-by: Jonas Gorski <jogo@openwrt.org>
+  	default:
+-@@ -4672,6 +4691,17 @@ static int ip6_pkt_prohibit_out(struct n
++@@ -4681,6 +4700,17 @@ static int ip6_pkt_prohibit_out(struct n
+  	return ip6_pkt_drop(skb, ICMPV6_ADM_PROHIBITED, IPSTATS_MIB_OUTNOROUTES);
+@@ -177,3 +177,3 @@ Signed-off-by: Jonas Gorski <jogo@openwrt.org>
+   */
+-@@ -5227,7 +5257,8 @@ static int rtm_to_fib6_config(struct sk_
++@@ -5236,7 +5266,8 @@ static int rtm_to_fib6_config(struct sk_
+  	if (rtm->rtm_type == RTN_UNREACHABLE ||
+@@ -187,3 +187,3 @@ Signed-off-by: Jonas Gorski <jogo@openwrt.org>
+  	if (rtm->rtm_type == RTN_LOCAL)
+-@@ -6496,6 +6527,8 @@ static int ip6_route_dev_notify(struct n
++@@ -6510,6 +6541,8 @@ static int ip6_route_dev_notify(struct n
+  #ifdef CONFIG_IPV6_MULTIPLE_TABLES
+@@ -196,3 +196,3 @@ Signed-off-by: Jonas Gorski <jogo@openwrt.org>
+  #endif
+-@@ -6507,6 +6540,7 @@ static int ip6_route_dev_notify(struct n
++@@ -6521,6 +6554,7 @@ static int ip6_route_dev_notify(struct n
+  		in6_dev_put_clear(&net->ipv6.ip6_null_entry->rt6i_idev);
+@@ -204,3 +204,3 @@ Signed-off-by: Jonas Gorski <jogo@openwrt.org>
+  	}
+-@@ -6702,6 +6736,8 @@ static int __net_init ip6_route_net_init
++@@ -6716,6 +6750,8 @@ static int __net_init ip6_route_net_init
+  
+@@ -213,3 +213,3 @@ Signed-off-by: Jonas Gorski <jogo@openwrt.org>
+  					       GFP_KERNEL);
+-@@ -6712,11 +6748,21 @@ static int __net_init ip6_route_net_init
++@@ -6726,11 +6762,21 @@ static int __net_init ip6_route_net_init
+  			 ip6_template_metrics, true);
+@@ -236,3 +236,3 @@ Signed-off-by: Jonas Gorski <jogo@openwrt.org>
+  			 ip6_template_metrics, true);
+-@@ -6743,6 +6789,8 @@ out:
++@@ -6757,6 +6803,8 @@ out:
+  	return ret;
+@@ -245,3 +245,3 @@ Signed-off-by: Jonas Gorski <jogo@openwrt.org>
+  out_ip6_null_entry:
+-@@ -6762,6 +6810,7 @@ static void __net_exit ip6_route_net_exi
++@@ -6776,6 +6824,7 @@ static void __net_exit ip6_route_net_exi
+  	kfree(net->ipv6.ip6_null_entry);
+@@ -253,3 +253,3 @@ Signed-off-by: Jonas Gorski <jogo@openwrt.org>
+  	dst_entries_destroy(&net->ipv6.ip6_dst_ops);
+-@@ -6845,6 +6894,9 @@ void __init ip6_route_init_special_entri
++@@ -6859,6 +6908,9 @@ void __init ip6_route_init_special_entri
+  	init_net.ipv6.ip6_prohibit_entry->rt6i_idev = in6_dev_get(init_net.loopback_dev);
+diff --git a/target/linux/generic/pending-6.18/681-net-remove-NETIF_F_GSO_FRAGLIST-from-NETIF_F_GSO_SOF.patch b/target/linux/generic/pending-6.18/681-net-remove-NETIF_F_GSO_FRAGLIST-from-NETIF_F_GSO_SOF.patch
+index 7382931ff2..d2cc13bebf 100644
+--- a/target/linux/generic/pending-6.18/681-net-remove-NETIF_F_GSO_FRAGLIST-from-NETIF_F_GSO_SOF.patch
++++ b/target/linux/generic/pending-6.18/681-net-remove-NETIF_F_GSO_FRAGLIST-from-NETIF_F_GSO_SOF.patch
+@@ -26,3 +26,3 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
+ +++ b/drivers/net/loopback.c
+-@@ -175,7 +175,7 @@ static void gen_lo_setup(struct net_devi
++@@ -181,7 +181,7 @@ static void gen_lo_setup(struct net_devi
+  	dev->lltx		= true;
+@@ -98,3 +98,3 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
+ +++ b/net/core/sock.c
+-@@ -2623,7 +2623,7 @@ void sk_setup_caps(struct sock *sk, stru
++@@ -2624,7 +2624,7 @@ void sk_setup_caps(struct sock *sk, stru
+  		icsk->icsk_ack.dst_quick_ack = dst_metric(dst, RTAX_QUICKACK);
+@@ -109,3 +109,3 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
+ +++ b/net/mac80211/ieee80211_i.h
+-@@ -2094,7 +2094,7 @@ void ieee80211_color_collision_detection
++@@ -2095,7 +2095,7 @@ void ieee80211_color_collision_detection
+  /* interface handling */
+diff --git a/target/linux/generic/pending-6.18/708-netfilter-flowtable-tear-down-direct-xmit-flows-when.patch b/target/linux/generic/pending-6.18/708-netfilter-flowtable-tear-down-direct-xmit-flows-when.patch
+index 5e2aad7238..532fe68817 100644
+--- a/target/linux/generic/pending-6.18/708-netfilter-flowtable-tear-down-direct-xmit-flows-when.patch
++++ b/target/linux/generic/pending-6.18/708-netfilter-flowtable-tear-down-direct-xmit-flows-when.patch
+@@ -160,3 +160,3 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
+ +++ b/net/bridge/br_private.h
+-@@ -1995,6 +1995,19 @@ struct nf_br_ops {
++@@ -1998,6 +1998,19 @@ struct nf_br_ops {
+  };
+@@ -182,3 +182,3 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
+ +++ b/net/netfilter/core.c
+-@@ -802,6 +802,9 @@ static struct pernet_operations netfilte
++@@ -818,6 +818,9 @@ static struct pernet_operations netfilte
+  	.exit = netfilter_net_exit,
+diff --git a/target/linux/generic/pending-6.18/710-bridge-add-knob-for-filtering-rx-tx-BPDU-pack.patch b/target/linux/generic/pending-6.18/710-bridge-add-knob-for-filtering-rx-tx-BPDU-pack.patch
+index 336fcb37d8..2516d6616a 100644
+--- a/target/linux/generic/pending-6.18/710-bridge-add-knob-for-filtering-rx-tx-BPDU-pack.patch
++++ b/target/linux/generic/pending-6.18/710-bridge-add-knob-for-filtering-rx-tx-BPDU-pack.patch
+@@ -16,7 +16,15 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
+ +++ b/include/linux/if_bridge.h
+-@@ -61,6 +61,7 @@ struct br_ip_list {
+- #define BR_PORT_LOCKED		BIT(21)
+- #define BR_PORT_MAB		BIT(22)
+- #define BR_NEIGH_VLAN_SUPPRESS	BIT(23)
+-+#define BR_BPDU_FILTER		BIT(24)
++@@ -62,6 +62,7 @@ enum bridge_flags_bit {
++ 	BR_PORT_MAB_BIT,
++ 	BR_NEIGH_VLAN_SUPPRESS_BIT,
++ 	BR_NEIGH_FORWARD_GRAT_BIT,
+++	BR_BPDU_FILTER_BIT,
++ };
++ 
++ #define BR_HAIRPIN_MODE		BIT(BR_HAIRPIN_MODE_BIT)
++@@ -90,6 +91,7 @@ enum bridge_flags_bit {
++ #define BR_PORT_MAB		BIT(BR_PORT_MAB_BIT)
++ #define BR_NEIGH_VLAN_SUPPRESS	BIT(BR_NEIGH_VLAN_SUPPRESS_BIT)
++ #define BR_NEIGH_FORWARD_GRAT	BIT(BR_NEIGH_FORWARD_GRAT_BIT)
+++#define BR_BPDU_FILTER		BIT(BR_BPDU_FILTER_BIT)
+  
+@@ -163,3 +171,3 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
+  	rtnl_doit_func		doit;
+-@@ -5349,7 +5349,9 @@ int ndo_dflt_bridge_getlink(struct sk_bu
++@@ -5350,7 +5350,9 @@ int ndo_dflt_bridge_getlink(struct sk_bu
+  	    brport_nla_put_flag(skb, flags, mask,
+diff --git a/target/linux/generic/pending-6.18/731-net-permit-ieee80211_ptr-even-with-no-CFG82111-suppo.patch b/target/linux/generic/pending-6.18/731-net-permit-ieee80211_ptr-even-with-no-CFG82111-suppo.patch
+index b43e7d6aad..320d7e0506 100644
+--- a/target/linux/generic/pending-6.18/731-net-permit-ieee80211_ptr-even-with-no-CFG82111-suppo.patch
++++ b/target/linux/generic/pending-6.18/731-net-permit-ieee80211_ptr-even-with-no-CFG82111-suppo.patch
+@@ -19,3 +19,3 @@ Signed-off-by: Christian Marangi <ansuelsmth@gmail.com>
+ +++ b/include/linux/netdevice.h
+-@@ -2312,7 +2312,7 @@ struct net_device {
++@@ -2332,7 +2332,7 @@ struct net_device {
+  #if IS_ENABLED(CONFIG_AX25)
+diff --git a/target/linux/generic/pending-6.18/811-pci_disable_usb_common_quirks.patch b/target/linux/generic/pending-6.18/811-pci_disable_usb_common_quirks.patch
+index 4e0360d47f..abc1550aba 100644
+--- a/target/linux/generic/pending-6.18/811-pci_disable_usb_common_quirks.patch
++++ b/target/linux/generic/pending-6.18/811-pci_disable_usb_common_quirks.patch
+@@ -39,3 +39,3 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
+  
+-@@ -1304,3 +1310,4 @@ static void quirk_usb_early_handoff(stru
++@@ -1305,3 +1311,4 @@ static void quirk_usb_early_handoff(stru
+  }
+diff --git a/target/linux/generic/pending-6.18/834-ledtrig-libata.patch b/target/linux/generic/pending-6.18/834-ledtrig-libata.patch
+index c427ed2614..3483ab7396 100644
+--- a/target/linux/generic/pending-6.18/834-ledtrig-libata.patch
++++ b/target/linux/generic/pending-6.18/834-ledtrig-libata.patch
+@@ -47,3 +47,3 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
+ +++ b/drivers/ata/libata-core.c
+-@@ -703,6 +703,17 @@ static inline void ata_set_tf_cdl(struct
++@@ -716,6 +716,17 @@ static inline void ata_set_tf_cdl(struct
+  	qc->flags |= ATA_QCFLAG_HAS_CDL | ATA_QCFLAG_RESULT_TF;
+@@ -65,3 +65,3 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
+   *	@qc: Metadata associated with the taskfile to build
+-@@ -4917,6 +4928,9 @@ void __ata_qc_complete(struct ata_queued
++@@ -4996,6 +5007,9 @@ void __ata_qc_complete(struct ata_queued
+  		link->active_tag = ATA_TAG_POISON;
+@@ -75,3 +75,3 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
+  	if (unlikely(qc->flags & ATA_QCFLAG_CLEAR_EXCL &&
+-@@ -5646,6 +5660,9 @@ struct ata_port *ata_port_alloc(struct a
++@@ -5725,6 +5739,9 @@ struct ata_port *ata_port_alloc(struct a
+  	ap->stats.unhandled_irq = 1;
+@@ -85,3 +85,3 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
+  	ata_force_pflags(ap);
+-@@ -5662,6 +5679,12 @@ void ata_port_free(struct ata_port *ap)
++@@ -5741,6 +5758,12 @@ void ata_port_free(struct ata_port *ap)
+  	kfree(ap->pmp_link);
+@@ -98,3 +98,3 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
+  EXPORT_SYMBOL_GPL(ata_port_free);
+-@@ -6112,7 +6135,23 @@ int ata_host_register(struct ata_host *h
++@@ -6191,7 +6214,23 @@ int ata_host_register(struct ata_host *h
+  		WARN_ON(1);
+@@ -134,3 +134,3 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
+   * Define if arch has non-standard setup.  This is a _PCI_ standard
+-@@ -940,6 +943,10 @@ struct ata_port {
++@@ -944,6 +947,10 @@ struct ata_port {
+  #ifdef CONFIG_ATA_ACPI
+diff --git a/target/linux/generic/pending-6.18/880-leds-st1202-add-hardware-accelerated-blink-support.patch b/target/linux/generic/pending-6.18/880-leds-st1202-add-hardware-accelerated-blink-support.patch
+deleted file mode 100644
+index bad10480ed..0000000000
+--- a/target/linux/generic/pending-6.18/880-leds-st1202-add-hardware-accelerated-blink-support.patch
++++ /dev/null
+@@ -1,146 +0,0 @@
+-From 35cbd34a6a05cc53882b1b7ca6f338a93ab29fcb Mon Sep 17 00:00:00 2001
+-From: Manuel Fombuena <fombuena@outlook.com>
+-Date: Fri, 14 Aug 2026 10:16:54 +0100
+-Subject: [PATCH] leds: st1202: Add hardware-accelerated blink support
+-
+-Implement blink_set() to enable hardware-accelerated blinking via the
+-timer trigger. The LED1202 pattern engine is used to produce a two-step
+-sequence: full brightness for delay_on, off for delay_off, repeating
+-indefinitely.
+-
+-Requested delays are clamped to the hardware range [22ms, 5610ms] then
+-rounded up to the nearest 22ms step. Clamping before rounding prevents
+-integer overflow in roundup() for extreme input values; since
+-ST1202_MILLIS_PATTERN_DUR_MAX is an exact multiple of
+-ST1202_MILLIS_PATTERN_DUR_MIN, rounding a clamped value cannot exceed
+-the maximum. A zero delay is replaced with the default of 500ms
+-independently for each of delay_on and delay_off.
+-
+-The LED1202 pattern sequencer is global and its timing registers are
+-shared across all channels, so only one blink configuration can be
+-active at a time. Other active channels have their PWM slots zeroed for
+-both pattern steps so they remain dark rather than outputting unintended
+-values when the sequencer runs. The target channel's ILED register is
+-set to full brightness and the channel is enabled, since the timer
+-trigger deactivates the current trigger before calling blink_set which
+-would otherwise leave the channel disabled.
+-
+-Signed-off-by: Manuel Fombuena <fombuena@outlook.com>
+-Link: https://patch.msgid.link/GV1PR08MB84973F79E871176EB387C377C5DA2@GV1PR08MB8497.eurprd08.prod.outlook.com
+-Signed-off-by: Lee Jones <lee@kernel.org>
+----
+- drivers/leds/leds-st1202.c | 89 ++++++++++++++++++++++++++++++++++++++
+- 1 file changed, 89 insertions(+)
+-
+---- a/drivers/leds/leds-st1202.c
+-+++ b/drivers/leds/leds-st1202.c
+-@@ -16,6 +16,7 @@
+- #include <linux/slab.h>
+- #include <linux/string.h>
+- 
+-+#define ST1202_BLINK_DEFAULT_DELAY         500
+- #define ST1202_CHAN_DISABLE_ALL            0x00
+- #define ST1202_CHAN_ENABLE_HIGH            0x03
+- #define ST1202_CHAN_ENABLE_LOW             0x02
+-@@ -276,6 +277,93 @@ static int st1202_led_pattern_set(struct
+- 	return 0;
+- }
+- 
+-+static int st1202_blink_set(struct led_classdev *led_cdev,
+-+			unsigned long *delay_on, unsigned long *delay_off)
+-+{
+-+	struct st1202_led *led = cdev_to_st1202_led(led_cdev);
+-+	struct st1202_chip *chip = led->chip;
+-+	unsigned long on, off;
+-+	int ret;
+-+
+-+	if (!*delay_on)
+-+		*delay_on = ST1202_BLINK_DEFAULT_DELAY;
+-+	if (!*delay_off)
+-+		*delay_off = ST1202_BLINK_DEFAULT_DELAY;
+-+
+-+	on = *delay_on;
+-+	off = *delay_off;
+-+
+-+	on = clamp_val(on, ST1202_MILLIS_PATTERN_DUR_MIN, ST1202_MILLIS_PATTERN_DUR_MAX);
+-+	off = clamp_val(off, ST1202_MILLIS_PATTERN_DUR_MIN, ST1202_MILLIS_PATTERN_DUR_MAX);
+-+	on = roundup(on, ST1202_MILLIS_PATTERN_DUR_MIN);
+-+	off = roundup(off, ST1202_MILLIS_PATTERN_DUR_MIN);
+-+
+-+	guard(mutex)(&chip->lock);
+-+
+-+	ret = st1202_write_reg(chip, ST1202_CONFIG_REG, ST1202_CONFIG_REG_SHFT);
+-+	if (ret)
+-+		return ret;
+-+
+-+	/* Zero out PWM for all other active channels to prevent them from blinking */
+-+	for (int chan = 0; chan < ST1202_MAX_LEDS; chan++) {
+-+		if (!chip->leds[chan].is_active || chan == led->led_num)
+-+			continue;
+-+
+-+		ret = st1202_pwm_pattern_write(chip, chan, 0, LED_OFF);
+-+		if (ret)
+-+			return ret;
+-+
+-+		ret = st1202_pwm_pattern_write(chip, chan, 1, LED_OFF);
+-+		if (ret)
+-+			return ret;
+-+	}
+-+
+-+	ret = st1202_pwm_pattern_write(chip, led->led_num, 0, ST1202_PATTERN_PWM_FULL);
+-+	if (ret)
+-+		return ret;
+-+
+-+	ret = st1202_pwm_pattern_write(chip, led->led_num, 1, LED_OFF);
+-+	if (ret)
+-+		return ret;
+-+
+-+	ret = st1202_duration_pattern_write(chip, 0, on);
+-+	if (ret)
+-+		return ret;
+-+
+-+	ret = st1202_duration_pattern_write(chip, 1, off);
+-+	if (ret)
+-+		return ret;
+-+
+-+	for (int pattern = 2; pattern < ST1202_MAX_PATTERNS; pattern++) {
+-+		ret = st1202_write_reg(chip, ST1202_PATTERN_DUR + pattern, 0);
+-+		if (ret)
+-+			return ret;
+-+	}
+-+
+-+	ret = st1202_write_reg(chip, ST1202_PATTERN_REP, U8_MAX);
+-+	if (ret)
+-+		return ret;
+-+
+-+	ret = st1202_write_reg(chip, ST1202_ILED_REG0 + led->led_num, U8_MAX);
+-+	if (ret)
+-+		return ret;
+-+
+-+	ret = __st1202_channel_set(chip, led->led_num, true);
+-+	if (ret)
+-+		return ret;
+-+
+-+	ret = st1202_write_reg(chip, ST1202_CONFIG_REG,
+-+				ST1202_CONFIG_REG_PATSR | ST1202_CONFIG_REG_PATS |
+-+				ST1202_CONFIG_REG_SHFT);
+-+	if (ret)
+-+		return ret;
+-+
+-+	*delay_on = on;
+-+	*delay_off = off;
+-+
+-+	return 0;
+-+}
+-+
+- static int st1202_dt_init(struct st1202_chip *chip)
+- {
+- 	struct device *dev = &chip->client->dev;
+-@@ -302,6 +390,7 @@ static int st1202_dt_init(struct st1202_
+- 		led->led_cdev.pattern_set = st1202_led_pattern_set;
+- 		led->led_cdev.pattern_clear = st1202_led_pattern_clear;
+- 		led->led_cdev.default_trigger = "pattern";
+-+		led->led_cdev.blink_set = st1202_blink_set;
+- 		led->led_cdev.brightness_set = st1202_brightness_set;
+- 		led->led_cdev.brightness_get = st1202_brightness_get;
+- 	}
+diff --git a/target/linux/generic/pending-6.18/897-05-net-pse-pd-si3474-report-over-current-faults-via-INTb.patch b/target/linux/generic/pending-6.18/897-05-net-pse-pd-si3474-report-over-current-faults-via-INTb.patch
+index 7bf0015fb8..a3ba8354aa 100644
+--- a/target/linux/generic/pending-6.18/897-05-net-pse-pd-si3474-report-over-current-faults-via-INTb.patch
++++ b/target/linux/generic/pending-6.18/897-05-net-pse-pd-si3474-report-over-current-faults-via-INTb.patch
+@@ -126,3 +126,3 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
+  }
+-@@ -309,6 +351,8 @@ static int si3474_pi_enable(struct pse_c
++@@ -319,6 +361,8 @@ static int si3474_pi_enable(struct pse_c
+  	if (ret)
+@@ -135,3 +135,3 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
+  	 */
+-@@ -346,6 +390,8 @@ static int si3474_pi_disable(struct pse_
++@@ -361,6 +405,8 @@ static int si3474_pi_disable(struct pse_
+  	if (ret)
+@@ -144,3 +144,3 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
+  
+-@@ -453,6 +499,128 @@ static int si3474_pi_get_actual_pw(struc
++@@ -468,6 +514,128 @@ static int si3474_pi_get_actual_pw(struc
+  	return DIV_ROUND_CLOSEST_ULL(tmp_64, 1000000000);
+@@ -273,3 +273,3 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
+  	.pi_enable = si3474_pi_enable,
+-@@ -546,7 +714,10 @@ static int si3474_i2c_probe(struct i2c_c
++@@ -559,7 +727,10 @@ static int si3474_i2c_probe(struct i2c_c
+  		return ret;
 diff --git a/target/linux/qualcommbe/image/ipq95xx.mk b/target/linux/qualcommbe/image/ipq95xx.mk
 index fa3f81ddf2..307db82b79 100644
 --- a/target/linux/qualcommbe/image/ipq95xx.mk

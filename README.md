@@ -1,6 +1,6 @@
 # OpenWrt for the JioRouter AX6000 JIDU6111
 
-This workspace builds the community `qualcommbe/ipq95xx` profile for the JIDU6111 on Linux **6.18.64**. The editable OpenWrt checkout is `openwrt/`. The base image includes LuCI with HTTPS, routing, DHCP, DNS, firewall, Ethernet and USB controller drivers, and both ath11k radios with their firmware and JIDU board data.
+This workspace builds the community `qualcommbe/ipq95xx` profile for the JIDU6111 on Linux **6.18.65**. The editable OpenWrt checkout is `openwrt/`. The base image includes LuCI with HTTPS, routing, DHCP, DNS, firewall, Ethernet and USB controller drivers, and both ath11k radios with their firmware and JIDU board data.
 
 ## Install build tools and build
 
@@ -45,7 +45,15 @@ The two profiles use the same filenames and JIDU6111 device ID. Each image must 
 
 Edit `config/jidu6111-reflash.diffconfig` to persist package changes for both reflash profiles. `make save-config` saves changes from the standard profile.
 
-Clang ThinLTO requires LLVM 15 or newer and was tested with LLVM 21. With a versioned LLVM toolchain, pass `KERNEL_LLVM=-21` or an absolute tool directory ending in `/`. Both profiles use smaller ath11k RX buffers, support pressure stalls, proportional process memory and slab counters, and include AdGuard Home, Nicx Router Monitor, vnStat, nlbwmon, collectd and zram. See the [driver PR audit](sources/jidu6111-driver-audit.md) for included fixes.
+Clang ThinLTO requires LLVM 15 or newer and was tested with LLVM 21. With a versioned LLVM toolchain, pass `KERNEL_LLVM=-21` or an absolute tool directory ending in `/`. Both profiles use smaller ath11k RX buffers and include AdGuard Home, Nicx Router Monitor, vnStat, nlbwmon, collectd and zram.
+
+#### CPU and memory monitoring
+
+- The Memory page compares RAM declared by the device tree with Linux-managed RAM and shows named firmware reservations separately. Within Linux-managed RAM it shows anonymous pages, shared memory and tmpfs, file cache, slab, page tables, stacks, and the signed difference between the measured categories and total. It also shows slab backing pages, accurate kernel allocation sites, page-zone watermarks and free-block sizes, process PSS and swap, zram, socket memory and pressure stalls.
+- The CPU page shows aggregate and per-core time by state, including hardware and software IRQ time, the busiest tasks, scheduling and interrupt counters, CPU frequency where supported, and temperatures. Existing WAN and USB WAN collection, Wi-Fi, storage, connectivity and service health continue alongside it.
+- Both reflash kernels enable IRQ-time accounting, SLUB counters, pressure stalls and allocation-site profiling. Linux and device firmware expose different views of RAM and some counters overlap. The dashboard shows the difference explicitly. Profiling overhead and forwarding behavior still need measurement on the router.
+
+The firmware installs the agent version pinned in the [package feed list](sources/feeds.conf). The [dashboard update](https://github.com/NICxKMS/openwrt-jidu6111/pull/7) uses the same enrollment and telemetry schema. Existing local monitoring databases remain part of the backup procedure below.
 
 **Migration from the old names.** `make build-optimized` and `openwrt/bin-optimized/` became `make build-gcc-kernel` and `openwrt/bin-gcc-kernel/`. `make build-thinlto` and `openwrt/bin-thinlto/` became `make build-clang-thinlto` and `openwrt/bin-clang-thinlto/`. For configuration only, use `make configure-gcc-kernel` or `make configure-clang-thinlto`.
 
@@ -150,9 +158,25 @@ If both routers perform NAT, outbound IPv4 traffic uses double NAT. Inbound port
 
 - The local collectd feed patch shares the RRD library lock between file creation and updates. It fixes startup graph errors such as “Not enough arguments” and publishes `collectd-mod-rrdtool` as `5.12.0-r60`. `make feeds` and the wrapper build checks apply this patch automatically.
 
-- The 26 November 2026 source pin merges [OpenWrt main `f76496253dfc`](https://github.com/openwrt/openwrt/commit/f76496253dfc6a987843a32c5f18b92f668dd3e0) with [JIDU6J11 support `0906df49261c`](https://github.com/SahilB69/openwrt/commit/0906df49261c33da63a409c9f7ad5c1f0f68a69e). OpenWrt main includes the [WCSS memory reservation fix](https://github.com/openwrt/openwrt/pull/26847). Package feeds are pinned in `sources/feeds.conf`.
+- The 26 November 2026 source pin merges [OpenWrt main `f76496253dfc`](https://github.com/openwrt/openwrt/commit/f76496253dfc6a987843a32c5f18b92f668dd3e0) with [JIDU6J11 support `727ed7916a1d`](https://github.com/openwrt/openwrt/commit/727ed7916a1df588a5a325119e837fec5483c062). The board update derives the label MAC from the WAN MAC and updates the U-Boot tools release. The pinned official package feeds include AdGuard Home 1.0.0. [Feed revisions](sources/feeds.conf)
 - [IPQ9574 and QCN9074 board data](https://github.com/openwrt/firmware_qca-wireless/commit/be12dccc79b79799192206514b7ef2dbc222d482) and [iwinfo IPQ9574 device ID](https://github.com/openwrt/iwinfo/commit/49e3d3fa4752971deefe3af9c0608fe461a32df9).
 - The build includes the OpenWrt ath11k fixes for suspend/resume interrupts, short management frames, and IRQ cleanup, plus the community per-ring RX memory, interrupt lifecycle, and ring sizing changes. The per-ring patch uses the OpenWrt recovery interrupt sequence. The firmware honors the configured Wi-Fi country.
+
+### Included upstream pull requests
+
+| Area | Pull requests used in these builds |
+| --- | --- |
+| Linux 6.18.65 | [kernel update #26893](https://github.com/openwrt/openwrt/pull/26893) |
+| Board, calibration and memory | [OpenWrt #26498](https://github.com/openwrt/openwrt/pull/26498) · [board data #193](https://github.com/openwrt/firmware_qca-wireless/pull/193) · [WCSS reservation #26847](https://github.com/openwrt/openwrt/pull/26847) · [iwinfo #51](https://github.com/openwrt/iwinfo/pull/51) |
+| Ethernet | [#25405](https://github.com/openwrt/openwrt/pull/25405) · [#25569](https://github.com/openwrt/openwrt/pull/25569) · [#26055](https://github.com/openwrt/openwrt/pull/26055) · [#26461](https://github.com/openwrt/openwrt/pull/26461) · [#26741](https://github.com/openwrt/openwrt/pull/26741) |
+| Shared network fixes | [#26122](https://github.com/openwrt/openwrt/pull/26122) · [#26492](https://github.com/openwrt/openwrt/pull/26492) |
+| Wi-Fi driver | [#25807](https://github.com/openwrt/openwrt/pull/25807) · [#25982](https://github.com/openwrt/openwrt/pull/25982) · [#26253](https://github.com/openwrt/openwrt/pull/26253) · [#26866](https://github.com/openwrt/openwrt/pull/26866) · [#25520](https://github.com/openwrt/openwrt/pull/25520) · [#26161](https://github.com/openwrt/openwrt/pull/26161) · [#25733](https://github.com/openwrt/openwrt/pull/25733) |
+| Wi-Fi control | [#26341](https://github.com/openwrt/openwrt/pull/26341) · [#26199](https://github.com/openwrt/openwrt/pull/26199) · [#26652](https://github.com/openwrt/openwrt/pull/26652) · [#26342](https://github.com/openwrt/openwrt/pull/26342) · [#26534](https://github.com/openwrt/openwrt/pull/26534) · [#26395](https://github.com/openwrt/openwrt/pull/26395) · [#26326](https://github.com/openwrt/openwrt/pull/26326) · [#26392](https://github.com/openwrt/openwrt/pull/26392) · [#26494](https://github.com/openwrt/openwrt/pull/26494) · [#26655](https://github.com/openwrt/openwrt/pull/26655) · [#26939](https://github.com/openwrt/openwrt/pull/26939) |
+| Wi-Fi recovery and compatibility | [#26875](https://github.com/openwrt/openwrt/pull/26875) · [#26709](https://github.com/openwrt/openwrt/pull/26709) · [#26613](https://github.com/openwrt/openwrt/pull/26613) · [#26057](https://github.com/openwrt/openwrt/pull/26057) |
+| WAN and Wi-Fi service recovery | [#25851](https://github.com/openwrt/openwrt/pull/25851) · [#26273](https://github.com/openwrt/openwrt/pull/26273) · [#26164](https://github.com/openwrt/openwrt/pull/26164) · [#26653](https://github.com/openwrt/openwrt/pull/26653) · [#26894](https://github.com/openwrt/openwrt/pull/26894) |
+| Existing driver backports | [RXDMA and interrupt handling #24254](https://github.com/openwrt/openwrt/pull/24254) · [receive coalescing #24658](https://github.com/openwrt/openwrt/pull/24658) |
+
+For #26893, #26122, #25807, #25982, #26253 and #26655, the build uses the changes that apply to this board and backports version. The [driver audit](sources/jidu6111-driver-audit.md) records those portions, fixes already covered by upstream code, and why other candidates were omitted.
 
 ## Credits
 

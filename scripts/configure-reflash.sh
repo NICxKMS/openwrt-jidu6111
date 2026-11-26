@@ -9,14 +9,17 @@ case "$profile" in
     *) printf 'Unknown build profile %s\n' "$profile" >&2; exit 2;;
 esac
 
+monitor_pin=$(awk '$2 == "nicx_monitor" { sub(/^.*\^/, "", $3); print $3 }' ../sources/feeds.conf)
+if [[ ! "$monitor_pin" =~ ^[0-9a-f]{40}$ ||
+      $(git -C feeds/nicx_monitor rev-parse HEAD 2>/dev/null) != "$monitor_pin" ]]; then
+    printf 'The Nicx Monitor feed is missing or does not match the source pin. Run make feeds.\n' >&2
+    exit 1
+fi
 for package in nicx-telemetry luci-app-nicx-telemetry; do
-    source="$project/nicx-router-monitor/openwrt/$package"
-    destination="package/$package"
-    if [[ ! -e "$destination" && ! -L "$destination" ]]; then
-        ln -s "$source" "$destination"
-    fi
-    if [[ ! "$source" -ef "$destination" ]]; then
-        printf 'Unexpected existing package at %s\n' "$destination" >&2
+    source="feeds/nicx_monitor/nicx-router-monitor/openwrt/$package"
+    destination="package/feeds/nicx_monitor/$package"
+    if [[ -e "package/$package" || -L "package/$package" || ! "$source" -ef "$destination" ]]; then
+        printf 'Expected %s from the pinned Nicx Monitor feed. Run make feeds in a clean OpenWrt checkout.\n' "$package" >&2
         exit 1
     fi
 done
