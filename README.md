@@ -22,3 +22,7 @@ apk --repositories-file /dev/null -X https://raw.githubusercontent.com/NICxKMS/o
 ## Beta firmware
 
 The [Linux 6.18.64 beta](beta/README.md) offers **Try first · Clang ThinLTO** and **Fallback · GCC**, each with dual-band and 5 GHz-only images and a matching signed APK feed.
+
+## Current source
+
+The [shared firmware and monitor source](https://github.com/NICxKMS/openwrt-jidu6111/tree/75832626ea975cbd39b173946930ab87663f3ecd) targets Linux **6.18.65** and includes Nicx Telemetry **1.0.0-r9**. The published beta above contains Linux **6.18.64** and Nicx Telemetry **1.0.0-r4**. Use the image and signed APK feed from the same published build.

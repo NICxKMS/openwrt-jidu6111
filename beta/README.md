@@ -1,5 +1,7 @@
 # JIDU6111 firmware beta
 
+This is the published Linux 6.18.64 beta. See the [release branch status](../README.md#current-source) for the current source version.
+
 Pick a build, then choose the Wi-Fi bands you use. Both builds include the same driver fixes, AdGuard Home, monitoring and LTO for eligible packages. The kernel and its modules use different compilers.
 
 | Build | Dual-band · 2.4 and 5 GHz | 5 GHz only · frees 43 MiB reserved for 2.4 GHz | Signed packages |
