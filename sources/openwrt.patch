@@ -89,7 +89,7 @@ index 27d1dd7d26..a14061a91a 100644
 @@ -14,3 +14,3 @@ PKG_SOURCE_VERSION:=7.2
  PKG_VERSION:=$(subst -,_,$(PKG_SOURCE_VERSION))
 -PKG_RELEASE:=18
-+PKG_RELEASE:=21
++PKG_RELEASE:=22
  PKG_LICENSE:=GPL-2.0-only
 diff --git a/package/kernel/mac80211/patches/build/150-sysfs-backport.patch b/package/kernel/mac80211/patches/build/150-sysfs-backport.patch
 index 877040f6ea..e1d4bc16de 100644

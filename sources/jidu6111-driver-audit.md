@@ -16,6 +16,9 @@ Searches returned 318 distinct OpenWrt pull requests across Qualcomm target, boa
 
 The build uses the generic and mac80211 changes from #26893. It takes the multicast-table fix from #26122, the ath11k portions of #25807 and #26253, the retry-statistics patch from #25982, and the late-interface hotplug fix from #26655. The remaining changes cover another SoC, drivers outside the image, older mac80211 patch context, or packet-steering policy. The previously included patch content matched the current versions of those PRs.
 
+
+The WMI recovery patch follows [ath-next v3 05/13](https://lore.kernel.org/r/20261121230731.1206043-6-julius@bairaktaris.de) on the pinned 7.2 backport. Patch 954 initializes all CE descriptor queues at allocation, before recovery can wake them. The QMI server-exit path sets recovery before cleanup. For PCI resets, the reset worker sets it before cleanup since QMI reports server exit later. Both WMI wait predicates exit with `-ESHUTDOWN` when a normal sender retries during recovery. The restart worker can still send setup commands, and successful firmware reconfiguration clears the flag before mac80211 resumes. QMI FW_READY clears it only on initial registration.
+
 ## Other relevant results
 
 - The cross-radio workaround in [#26199](https://github.com/openwrt/openwrt/pull/26199) targets firmware tested on IPQ8074. It tears down the established association before the new one succeeds. JIDU6111 keeps standard hostapd association handling and includes the separate same-radio ath11k fix from [#25520](https://github.com/openwrt/openwrt/pull/25520), tested upstream on IPQ9574.
