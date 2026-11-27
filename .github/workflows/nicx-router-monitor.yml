@@ -30,7 +30,7 @@ jobs:
             echo 'monitor=true' >> "$GITHUB_OUTPUT"
           else
             git diff --name-only "$BASE" HEAD > "$RUNNER_TEMP/changed-files"
-            if grep -Eq '^(nicx-router-monitor/|sources/feeds[.]conf$|[.]github/workflows/|scripts/(release|install-packages|package_dashboard))' "$RUNNER_TEMP/changed-files"; then
+            if grep -Eq '^(Makefile$|nicx-router-monitor/|sources/feeds[.]conf$|[.]github/workflows/|scripts/(release|install-packages|package_dashboard))' "$RUNNER_TEMP/changed-files"; then
               echo 'monitor=true' >> "$GITHUB_OUTPUT"
             fi
           fi

@@ -29,7 +29,7 @@ def components(paths):
         if path.endswith(DOC_SUFFIXES):
             continue
         if path == "Makefile":
-            result.update(("release", "firmware", "packages"))
+            return ALL.copy()
         elif path.startswith(("config/", "sources/", "scripts/configure-", "scripts/bootstrap-",
                             "scripts/build-firmware", "scripts/firmware_artifacts")):
             result.update(("firmware", "packages"))

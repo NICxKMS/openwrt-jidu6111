@@ -21,8 +21,8 @@ class ComponentScopeTests(unittest.TestCase):
             {"dashboard", "worker", "agent", "database"},
         )
 
-    def test_makefile_changes_reverify_build_inputs(self):
-        self.assertEqual(composition.components(["Makefile"]), {"firmware", "packages", "release"})
+    def test_makefile_changes_reverify_build_and_monitoring(self):
+        self.assertEqual(composition.components(["Makefile"]), composition.ALL)
 
     def test_unknown_paths_trigger_broader_validation(self):
         self.assertEqual(composition.components(["unknown.json"]), composition.ALL)
