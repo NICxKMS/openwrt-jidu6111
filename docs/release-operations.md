@@ -51,3 +51,21 @@ If a step fails, reconcile actual router, Worker and database state with the ope
 Use `make cleanup` to preview abandoned owned build directories and `make cleanup APPLY=1` to remove them. Active directory locks protect running builds. The command covers marked release-build workspaces. Inspect historical worktrees, old package bundles and signing files separately before any cleanup. Run `make storage-report` for local storage and add `REMOTE=1` to include GitHub release and Actions cache usage. GitHub-hosted jobs use disposable dependencies. After the new workflows land, remove obsolete repository caches and compare GitHub totals before and after.
 
 Verify the legacy replacement on the physical router before requesting retirement of the old artifact branch and beta tag. Keep raw legacy feed URLs usable during that transition.
+
+## Cloudflare Development Preview
+
+Use the native Cloudflare Worker Preview named `development` for the hosted dashboard and API. It gives the team one URL while keeping Preview variables, secrets and rate limits separate from production. The local disposable stack remains available for database and simulated-router integration tests. [Cloudflare Worker Previews](https://developers.cloudflare.com/workers/previews/get-started/)
+
+Configure the GitHub `development-preview` environment for the protected `development` branch. Use only an independent Supabase test project with synthetic data.
+
+| Environment setting | Value |
+| --- | --- |
+| `NICX_PREVIEW_ORIGIN` | `https://development-nicx-router-monitor.<account-subdomain>.workers.dev` |
+| `NICX_PREVIEW_SUPABASE_URL` | Test project's Supabase HTTPS URL |
+| `NICX_PREVIEW_SUPABASE_PUBLISHABLE_KEY` | Test project's browser publishable key |
+| `NICX_PREVIEW_SUPABASE_SECRET_KEY` | Test project's backend key, stored as an environment secret |
+| `NICX_PREVIEW_CLOUDFLARE_TOKEN` | Environment secret with the Worker Preview permissions for this account |
+
+Restrict the Cloudflare token to the required Worker permissions. Rehearse and apply schema changes to the test project before updating the Preview. Configure the test project's Auth site URL and allowlist for the Preview origin. Use Cloudflare Access before sharing any Preview that contains private content.
+
+Run the `Cloudflare Development Preview` workflow on `development` with its exact head SHA. The run checks the URL, API health and served dashboard bytes. Once setup is verified, set the repository variable `NICX_DEVELOPMENT_PREVIEW_ENABLED` to `true` to refresh the same Preview after each successful Development firmware release. A failed Preview refresh can be rerun separately.

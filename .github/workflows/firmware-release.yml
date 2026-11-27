@@ -119,3 +119,10 @@ jobs:
             args+=(--consume-development "$CONSUMED")
           fi
           python3 -B scripts/release_workflow.py publish "${identity[@]}" --manifest-sha256 "$actual" "${args[@]}"
+
+  preview:
+    needs: publish
+    if: inputs.channel == 'development' && vars.NICX_DEVELOPMENT_PREVIEW_ENABLED == 'true'
+    uses: ./.github/workflows/monitor-preview.yml
+    with:
+      source_commit: ${{ inputs.source_commit }}
