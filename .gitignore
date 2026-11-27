@@ -7,3 +7,5 @@
 !/sources/
 !/nicx-router-monitor/
 !/.github/
+**/__pycache__/
+!/docs/

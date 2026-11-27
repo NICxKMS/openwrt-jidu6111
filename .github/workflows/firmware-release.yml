@@ -1,0 +1,121 @@
+name: Publish JIDU6111 release
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: Reserve an empty Stable draft or publish a verified release
+        type: choice
+        options: [publish, reserve]
+        default: publish
+      channel:
+        description: Release channel
+        type: choice
+        options: [development, stable]
+        required: true
+      source_commit:
+        description: Exact approved SHA for the selected source branch
+        type: string
+        required: true
+      tag:
+        description: Exact staged GitHub draft tag
+        type: string
+        required: true
+      manifest_sha:
+        description: SHA-256 of verified release-manifest.json
+        type: string
+        required: false
+      production_evidence:
+        description: Current maintainer-verified production evidence for Stable
+        type: string
+        required: false
+      consume_development:
+        description: Exact Development tag promoted into Stable, when applicable
+        type: string
+        required: false
+
+permissions:
+  contents: read
+concurrency:
+  group: jidu6111-release-publish
+  cancel-in-progress: false
+
+jobs:
+  reserve:
+    if: inputs.operation == 'reserve' && inputs.channel == 'stable' && github.ref == 'refs/heads/stable' && github.sha == inputs.source_commit
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: python3 -B scripts/release_workflow.py reserve --channel stable --tag "$TAG" --commit "$GITHUB_SHA"
+
+  verify:
+    if: inputs.operation == 'publish' && github.ref == format('refs/heads/{0}', inputs.channel) && github.sha == inputs.source_commit
+    uses: ./.github/workflows/nicx-router-monitor.yml
+
+  publish:
+    needs: verify
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.channel == 'stable' && 'production' || 'development-release' }}
+    permissions:
+      contents: write
+      actions: read
+      checks: read
+    steps:
+      - if: inputs.channel == 'stable'
+        name: Check maintainer environment approval
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MAINTAINER: ${{ vars.JIDU6111_PRODUCTION_MAINTAINER }}
+        run: |
+          test -n "$MAINTAINER"
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/approvals" |
+            jq -e --arg user "$MAINTAINER" '
+              any(.[]; .state == "approved" and
+                (.user.login | ascii_downcase) == ($user | ascii_downcase) and
+                any(.environments[]; .name == "production"))
+            ' >/dev/null
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Verify signed images and feeds and publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          CHANNEL: ${{ inputs.channel }}
+          TAG: ${{ inputs.tag }}
+          MANIFEST_SHA: ${{ inputs.manifest_sha }}
+          CONSUMED: ${{ inputs.consume_development }}
+          EVIDENCE: ${{ inputs.production_evidence }}
+          MAINTAINER: ${{ vars.JIDU6111_PRODUCTION_MAINTAINER }}
+        run: |
+          set -euo pipefail
+          assets=$(mktemp -d "$RUNNER_TEMP/jidu-assets.XXXXXXXX")
+          trap 'rm -rf -- "$assets"' EXIT
+          identity=(--repo "$REPOSITORY" --channel "$CHANNEL" --tag "$TAG" --commit "$GITHUB_SHA")
+          python3 -B scripts/release_workflow.py fetch "${identity[@]}" --directory "$assets"
+          actual=$(sha256sum "$assets/release-manifest.json" | cut -d ' ' -f1)
+          [[ "$actual" == "$MANIFEST_SHA" ]]
+          if [[ "$CHANNEL" == stable ]]; then
+            python3 -B scripts/promotion.py verify-publication-evidence \
+              --manifest "$assets/release-manifest.json" --reservation-tag "$TAG" --evidence "$EVIDENCE" \
+              --repo "$REPOSITORY" --maintainer "$MAINTAINER"
+          else
+            jq -e '([.profiles[].id] | sort) == ["clang-thinlto", "gcc-kernel"] and
+              all(.profiles[]; ([.images[].radio] | sort) == ["dual-band", "wcss-off"])'               "$assets/release-manifest.json" >/dev/null
+          fi
+          docker run --rm -v "$PWD/scripts:/scripts:ro" -v "$assets:/assets:ro" alpine:3.23@sha256:469c9ea410b9215eaee7976ba6c0639039b444be8e5d638f7abbada189971eb2 \
+            sh -ec 'apk add --no-cache python3=3.12.16-r0 squashfs-tools=4.7.4-r0; python3 -B /scripts/firmware_artifacts.py verify --directory /assets --apk /sbin/apk'
+          args=()
+          if [[ "$CHANNEL" == stable && "$(jq -r '.promotion.kind' "$assets/release-manifest.json")" == firmware ]]; then
+            [[ -n "$CONSUMED" ]] || { echo 'Firmware promotion must consume the verified Development tag.' >&2; exit 1; }
+          fi
+          if [[ -n "$CONSUMED" ]]; then
+            args+=(--consume-development "$CONSUMED")
+          fi
+          python3 -B scripts/release_workflow.py publish "${identity[@]}" --manifest-sha256 "$actual" "${args[@]}"

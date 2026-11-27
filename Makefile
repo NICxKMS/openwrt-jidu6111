@@ -8,7 +8,7 @@ REFLASH_PROFILE := CONFIG_TARGET_DEVICE_qualcommbe_ipq95xx_DEVICE_jiorouter_ax60
 .PHONY: help host-deps source feeds configure configure-gcc-kernel configure-clang-thinlto menuconfig save-config check download build build-gcc-kernel build-clang-thinlto package package-index cache-stats
 
 # OpenWrt splits PATH on whitespace. Keep absolute entries it can pass intact.
-feeds configure configure-gcc-kernel configure-clang-thinlto menuconfig save-config download build build-gcc-kernel build-clang-thinlto package package-index cache-stats: export PATH := $(shell printf '%s' "$$PATH" | awk -v RS=: '/^\// && !/[[:space:]]/ { printf "%s%s", separator, $$0; separator = ":" }')
+feeds configure configure-gcc-kernel configure-clang-thinlto menuconfig save-config download build build-gcc-kernel build-clang-thinlto package package-index cache-stats build-firmware: export PATH := $(shell printf '%s' "$$PATH" | awk -v RS=: '/^\// && !/[[:space:]]/ { printf "%s%s", separator, $$0; separator = ":" }')
 
 help:
 	@printf '%s\n' \
@@ -28,14 +28,27 @@ help:
 	  '                               Each produces two radio images and a signed APK feed.' \
 	  'make package PACKAGE=<name>   Build a selected package and its dependencies' \
 	  'make package-index           Refresh the signed APK indexes and combined repository' \
-	  'make cache-stats             Show compiler cache usage and hit rate'
+	  'make build-firmware          Build from an exact commit in a disposable workspace' \
+	  'make install-packages        Open the matching signed-feed package dashboard' \
+	  'make test-release            Run release, installer and promotion tests' \
+	  'make release-dev             Stage verified assets and request Development publication' \
+	  'make reserve-stable          Reserve a Stable draft for an approved promotion' \
+	  'make stage-stable            Upload verified assets to the reserved Stable draft' \
+	  'make promote                 Request approval to publish verified production' \
+	  'make verify-router           Read board, installed packages and trust fingerprints' \
+	  'make cleanup                 Preview removal of abandoned owned builds' \
+	  'make repo-status             Show the checkout and private promotion state' \
+	  'make dev-up                  Run the disposable monitoring stack' \
+	  'make dev-down                Clean abandoned monitoring stacks' \
+	  'make cache-stats             Inspect existing interactive compiler caches' \
+	  'make storage-report          Report build storage, with REMOTE=1 for GitHub'
 
 host-deps:
 	sudo apt-get update
 	sudo apt-get install build-essential clang flex bison bc bzip2 ccache cpio curl file \
 	  gawk gettext git libelf-dev libncurses-dev libssl-dev lld llvm patch pkg-config \
 	  python3-dev python3-pyelftools python3-setuptools rsync swig time unzip \
-	  wget xz-utils zlib1g-dev zstd
+	  wget xz-utils zlib1g-dev zstd openssl squashfs-tools
 
 source:
 	bash scripts/bootstrap-source.sh
@@ -109,3 +122,66 @@ package-index: check
 
 cache-stats:
 	CCACHE_DIR="$(CURDIR)/openwrt/.ccache" ccache --show-stats
+
+.PHONY: build-firmware install-packages verify-router release-dev reserve-stable stage-stable promote cleanup storage-report repo-status test-release dev-up dev-down
+
+export JIDU_OP_COMMIT := $(COMMIT)
+export JIDU_OP_TAG := $(TAG)
+export JIDU_OP_OUTPUT := $(OUTPUT)
+export JIDU_OP_SIGNING_KEY := $(SIGNING_KEY)
+export JIDU_OP_BUILD_PROFILE := $(BUILD_PROFILE)
+export JIDU_OP_FEED_PROFILE := $(FEED_PROFILE)
+export JIDU_OP_ROUTER := $(ROUTER)
+export JIDU_OP_FEED := $(FEED)
+export JIDU_OP_CHANNEL := $(CHANNEL)
+export JIDU_OP_CONSUME := $(CONSUME_DEVELOPMENT)
+
+build-firmware:
+	@set -eu; set --; if [ -n "$$JIDU_OP_BUILD_PROFILE" ]; then set -- --profile "$$JIDU_OP_BUILD_PROFILE"; fi; \
+	  bash scripts/build-firmware.sh --commit "$$JIDU_OP_COMMIT" --output "$$JIDU_OP_OUTPUT" \
+	    --signing-key "$$JIDU_OP_SIGNING_KEY" --jobs "$(JOBS)" "$$@"
+
+install-packages:
+	@set -eu; set --; \
+	  if [ -n "$$JIDU_OP_ROUTER" ]; then set -- "$$@" --router "$$JIDU_OP_ROUTER"; fi; \
+	  if [ -n "$$JIDU_OP_FEED" ]; then set -- "$$@" --feed "$$JIDU_OP_FEED"; \
+	  elif [ -n "$$JIDU_OP_CHANNEL" ]; then set -- "$$@" --channel "$$JIDU_OP_CHANNEL"; fi; \
+	  if [ -n "$$JIDU_OP_FEED_PROFILE" ]; then set -- "$$@" --profile "$$JIDU_OP_FEED_PROFILE"; fi; \
+	  python3 -B scripts/install-packages.py "$$@"
+
+verify-router:
+	@ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=10 -- "root@$${JIDU_OP_ROUTER:-192.168.50.1}" \
+	  'ubus call system board && apk info -v kernel nicx-telemetry luci-app-nicx-telemetry && cat /etc/apk/arch && sha256sum /etc/apk/keys/*.pem'
+
+release-dev:
+	@bash scripts/release-operator.sh development
+
+reserve-stable:
+	@bash scripts/release-operator.sh reserve
+
+stage-stable:
+	@bash scripts/release-operator.sh stage
+
+promote:
+	@bash scripts/release-operator.sh promote
+
+cleanup:
+	@python3 -B scripts/release_storage.py cleanup $(if $(filter 1,$(APPLY)),--apply)
+
+storage-report:
+	@python3 -B scripts/release_storage.py report $(if $(filter 1,$(REMOTE)),--remote)
+
+repo-status:
+	@git status --short --branch
+	@git worktree list
+	@python3 -B scripts/promotion.py status
+
+test-release:
+	@python3 -B -m unittest discover -s scripts/tests -v
+
+
+dev-up:
+	@python3 -B nicx-router-monitor/scripts/dev-stack.py
+
+dev-down:
+	@python3 -B nicx-router-monitor/scripts/dev-stack.py --cleanup

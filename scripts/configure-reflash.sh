@@ -53,6 +53,10 @@ awk '
     }
     END { for (i = 1; i <= count; i++) print settings[order[i]] }
 ' ../config/jidu6111.diffconfig ../config/jidu6111-reflash.diffconfig > "$seed"
+if [[ ${JIDU6111_RELEASE_BUILD:-0} == 1 ]]; then
+    sed -i -E '/^(# )?CONFIG_(CCACHE|BUILD_LOG)(=| )/d' "$seed"
+    printf '%s\n' '# CONFIG_CCACHE is not set' '# CONFIG_BUILD_LOG is not set' >> "$seed"
+fi
 if [[ "$profile" == clang-thinlto ]]; then
     printf '%s\n' 'CONFIG_KERNEL_LTO_CLANG_THIN=y' >> "$seed"
 fi
