@@ -44,6 +44,8 @@ make build-clang-thinlto JOBS=8
 
 Each profile builds both radio variants, for **four sysupgrade images** across the two profiles. Pick the radio variant within your chosen profile.
 
+Both monitoring APK recipes come from the exact `nicx_monitor` Git pin in `sources/feeds.conf`. Develop and verify package changes in [openwrt-router-monitor](https://github.com/NICxKMS/openwrt-router-monitor), then submit a firmware PR updating the full pin. In a prepared firmware environment, run `make source feeds configure-gcc-kernel` followed by `make -C openwrt package/feeds/nicx_monitor/nicx-telemetry/compile package/feeds/nicx_monitor/luci-app-nicx-telemetry/compile`. Continue through the existing signing and release process. The profile manifest records the bundled package versions and source pin. Router inventory separately reports what is installed on the physical device.
+
 | Radio choice | Sysupgrade filename ending |
 | --- | --- |
 | **Dual-band** for 2.4 GHz and 5 GHz | `jidu6111-squashfs-sysupgrade.bin` |

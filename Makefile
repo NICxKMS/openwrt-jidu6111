@@ -54,6 +54,15 @@ source:
 	bash scripts/bootstrap-source.sh
 
 feeds:
+	@set -eu; checkout=openwrt/feeds/nicx_monitor; \
+	  pin=$$(awk '$$2 == "nicx_monitor" { sub(/^.*\^/, "", $$3); print $$3 }' sources/feeds.conf); \
+	  if [ -e "$$checkout" ] || [ -L "$$checkout" ]; then \
+	    if [ ! -d "$$checkout/.git" ] || [ "$$(git -C "$$checkout" rev-parse HEAD)" != "$$pin" ] || \
+	       ! feed_status=$$(git -C "$$checkout" status --porcelain --untracked-files=all) || [ -n "$$feed_status" ]; then \
+	      echo 'The Nicx Monitor feed differs from its pin or has local changes. Preserve local edits, move openwrt/feeds/nicx_monitor aside, then rerun make feeds.' >&2; exit 1; \
+	    fi; \
+	  fi
+	cp sources/feeds.conf openwrt/feeds.conf
 	cd openwrt && ./scripts/feeds update -a
 	bash scripts/apply-feed-patches.sh
 	cd openwrt && ./scripts/feeds install -a

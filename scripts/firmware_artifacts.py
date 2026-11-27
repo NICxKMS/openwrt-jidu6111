@@ -26,6 +26,7 @@ RADIOS = {'dual-band': DEVICE, 'wcss-off': f'{DEVICE}-wcss-off'}
 BUILD_PROFILES = ('gcc-kernel', 'clang-thinlto')
 FILE_NAME = re.compile(r'[A-Za-z0-9][A-Za-z0-9._+~-]*\Z')
 COMMIT = re.compile(r'[a-f0-9]{40}\Z')
+MONITOR_PACKAGES = ('nicx-telemetry', 'luci-app-nicx-telemetry')
 
 
 def command(*args, **kwargs):
@@ -187,6 +188,25 @@ def describe_assets(folder):
             and path.name != 'release-manifest.json'}
 
 
+def monitoring_source(openwrt, installed):
+    feeds = (openwrt / 'feeds.conf').read_text(encoding='utf-8').splitlines()
+    sources = [line.split() for line in feeds if line.split()[1:2] == ['nicx_monitor']]
+    if len(sources) != 1 or len(sources[0]) != 3 or sources[0][0] != 'src-git':
+        raise ValueError('Expected one Git source for the nicx_monitor feed')
+    repository, _, pin = sources[0][2].rpartition('^')
+    if not repository or not COMMIT.fullmatch(pin):
+        raise ValueError('The nicx_monitor feed must use a full commit pin')
+    actual = command('git', '-C', openwrt / 'feeds/nicx_monitor', 'rev-parse', 'HEAD', text=True).strip()
+    if actual != pin:
+        raise ValueError('The built nicx_monitor feed differs from its configured pin')
+    packages = {}
+    for radio, inventory in installed.items():
+        if any(name not in inventory for name in MONITOR_PACKAGES):
+            raise ValueError(f'Monitoring package missing in the {radio} image')
+        packages[radio] = {name: inventory[name][0] for name in MONITOR_PACKAGES}
+    return {'repository': repository, 'commit': pin, 'packages': packages}
+
+
 def collect(args):
     profile = args.profile
     build = args.openwrt / f'bin-{profile}'
@@ -237,7 +257,8 @@ def collect(args):
         'verification': 'build-verified',
     })
     output_json(args.profile_record, {'id': profile, 'board': BOARD, 'feed': feed,
-                                      'images': images, 'buildinfo': buildinfo, **identity})
+                                      'images': images, 'buildinfo': buildinfo,
+                                      'monitoring': monitoring_source(args.openwrt, installed), **identity})
 
 
 def manifest(args):
