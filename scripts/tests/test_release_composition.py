@@ -29,6 +29,16 @@ class ComponentScopeTests(unittest.TestCase):
 
 
 class RepeatPromotionTests(unittest.TestCase):
+    def test_firmware_only_checkout_records_bundled_monitor_by_profile(self):
+        monitor = {"repository": "https://github.com/NICxKMS/openwrt-router-monitor.git",
+                   "commit": "a" * 40,
+                   "packages": {"dual-band": {"nicx-telemetry": "1.0.0-r9"}}}
+        with patch.object(composition, "git", return_value=""):
+            result = composition.monitor_provenance("b" * 40, [{"id": "gcc-kernel", "monitoring": monitor}])
+            self.assertEqual(result, {"bundled_by_profile": {"gcc-kernel": monitor}})
+            with self.assertRaisesRegex(ValueError, "lacks bundled monitor provenance"):
+                composition.monitor_provenance("b" * 40, [{"id": "legacy"}])
+
     def test_replaces_the_carried_worker_bundle_without_rebuilding_firmware(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = pathlib.Path(temporary)

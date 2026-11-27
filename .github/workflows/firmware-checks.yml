@@ -1,0 +1,71 @@
+name: Firmware repository checks
+on:
+  pull_request:
+  push:
+    branches: [main, development, stable]
+  workflow_call:
+
+permissions:
+  contents: read
+concurrency:
+  group: checks-${{ github.workflow }}-${{ github.ref }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || 'source' }}
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
+
+jobs:
+  scope:
+    runs-on: ubuntu-latest
+    outputs:
+      feed: ${{ steps.paths.outputs.feed }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - id: paths
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          if [[ "$EVENT" == workflow_dispatch ]] || ! git cat-file -e "$BASE^{commit}" 2>/dev/null; then
+            echo 'feed=true' >> "$GITHUB_OUTPUT"
+          else
+            git diff --name-only "$BASE" HEAD > "$RUNNER_TEMP/changed-files"
+            if grep -Eq '^(Makefile$|config/|sources/|scripts/(apply-feed-patches|bootstrap-source|build-firmware|configure-reflash|firmware_artifacts)[.]|[.]github/workflows/firmware-checks[.]yml$)' "$RUNNER_TEMP/changed-files"; then
+              echo 'feed=true' >> "$GITHUB_OUTPUT"
+            fi
+          fi
+      - run: |
+          python3 -B -m unittest discover -s scripts/tests -v
+          for script in scripts/*.sh; do bash -n "$script"; done
+          git diff --check HEAD^ HEAD
+
+  verify-feed:
+    needs: scope
+    if: needs.scope.outputs.feed == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Verify the pinned monitoring package metadata
+        run: |
+          make source
+          cd openwrt
+          # The LuCI monitoring recipe imports the pinned LuCI feed's luci.mk.
+          ./scripts/feeds update luci nicx_monitor
+          pin=$(awk '$2 == "nicx_monitor" { sub(/^.*\^/, "", $3); print $3 }' feeds.conf)
+          [[ "$pin" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git -C feeds/nicx_monitor rev-parse HEAD)" = "$pin"
+          grep -Fqx 'Package: nicx-telemetry' feeds/nicx_monitor.index
+          grep -Fqx 'Package: luci-app-nicx-telemetry' feeds/nicx_monitor.index
+
+  required:
+    name: Required repository checks
+    if: always()
+    needs: [scope, verify-feed]
+    runs-on: ubuntu-latest
+    env:
+      SCOPE: ${{ needs.scope.result }}
+      FEED: ${{ needs.verify-feed.result }}
+    steps:
+      - run: '[[ "$SCOPE" == success && ( "$FEED" == success || "$FEED" == skipped ) ]]'
