@@ -98,7 +98,10 @@ def required_checks(kind):
 def check_production(manifest, pending, observed):
     promotion = manifest["promotion"]
     kind = promotion["kind"]
-    missing = required_checks(kind) - set(observed.get("checks", []))
+    checks = observed.get("checks")
+    if not isinstance(checks, list) or not all(isinstance(check, str) for check in checks):
+        raise ValueError("Expected production check labels as a list of strings")
+    missing = required_checks(kind) - set(checks)
     if missing:
         raise ValueError(f"Missing production checks: {', '.join(sorted(missing))}")
     when = timestamp(observed.get("verified_at"))
@@ -114,12 +117,17 @@ def check_production(manifest, pending, observed):
     if not deploys_worker(promotion) and expected_worker and observed["worker_version"] != expected_worker:
         raise ValueError("Production Worker drifted from the approved baseline")
     router = observed["router"]
+    trusted_keys = router.get("trusted_keys")
+    if not isinstance(trusted_keys, list) or not all(
+        isinstance(key, str) and re.fullmatch(r"[a-f0-9]{64}", key) for key in trusted_keys
+    ):
+        raise ValueError("Expected router signing fingerprints as a list of SHA-256 strings")
     if not any(
         profile["board"] == router.get("board")
         and profile["kernel"] == router.get("kernel")
         and profile["architecture"] == router.get("architecture")
         and profile["firmware_revision"] == router.get("firmware")
-        and profile["key_sha256"] in router.get("trusted_keys", [])
+        and profile["key_sha256"] in trusted_keys
         for profile in manifest["profiles"]
     ):
         raise ValueError("The observed router identity and signing trust do not match a release profile")
@@ -269,7 +277,9 @@ def local_command(args):
         if args.command == "complete":
             repo = token(args.repo, r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", "repository")
             confirm_native_publication(GitHub(repo), identity)
-            state["production"] = {"release_tag": tag, "source_commit": identity["candidate"], **pending["observed"]}
+            state["production"] = {
+                **pending["observed"], "release_tag": tag, "source_commit": identity["candidate"],
+            }
             state["pending"] = None
 
 
@@ -393,7 +403,7 @@ def main():
     default = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local" / "state")) / "jidu6111"
     parser.add_argument("--state-dir", type=Path, default=default)
     commands = parser.add_subparsers(dest="command", required=True)
-    for name in ("prepare", "deployment-inputs", "verify-production", "authorize-publication",
+    for name in ("prepare", "deployment-inputs", "verify-production",
                  "publication-evidence", "verify-publication-evidence", "complete"):
         command = commands.add_parser(name)
         command.add_argument("--manifest", type=Path, required=True)

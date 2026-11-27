@@ -92,7 +92,7 @@ class PromotionTest(unittest.TestCase):
     def test_completion_keeps_only_observed_production_state(self):
         self.write_manifest("bootstrap")
         self.pending("prepare")
-        self.pending("authorize-publication", ok=False)
+        self.pending("publication-evidence", ok=False)
         observed = self.path / "observed.json"
         observed.write_text(json.dumps({
             "router": {"board": "jiorouter,ax6000-jidu6111", "kernel": "6.18.60-r1~abcd1",
@@ -102,9 +102,20 @@ class PromotionTest(unittest.TestCase):
             "checks": ["router_identity", "feed_signature", "worker_health", "database_state", "recovery_ready"],
         }))
         self.assertIn("match a release profile", self.pending("verify-production", "--observed", observed, ok=False).stderr)
-        observed.write_text(observed.read_text().replace("wrong", "r0+38470-c3af7ee2f2"))
+        evidence_record = json.loads(observed.read_text().replace("wrong", "r0+38470-c3af7ee2f2"))
+        for invalid_keys in ({"4" * 64: False}, "prefix" + "4" * 64, ["4" * 64, None]):
+            evidence_record["router"]["trusted_keys"] = invalid_keys
+            observed.write_text(json.dumps(evidence_record))
+            self.assertIn("fingerprints", self.pending("verify-production", "--observed", observed, ok=False).stderr)
+        evidence_record["router"]["trusted_keys"] = ["4" * 64]
+        labels = evidence_record["checks"]
+        evidence_record["checks"] = dict.fromkeys(labels, False)
+        observed.write_text(json.dumps(evidence_record))
+        self.assertIn("check labels", self.pending("verify-production", "--observed", observed, ok=False).stderr)
+        evidence_record["checks"] = labels
+        evidence_record.update(release_tag="v9.9.9", source_commit="9" * 40)
+        observed.write_text(json.dumps(evidence_record))
         self.pending("verify-production", "--observed", observed)
-        self.pending("authorize-publication")
         evidence = json.loads(self.pending("publication-evidence").stdout)
         self.assertEqual(evidence["candidate"], COMMIT)
         self.assertEqual(evidence["worker_version"], WORKER)
@@ -136,6 +147,7 @@ class PromotionTest(unittest.TestCase):
             promotion.local_command(options)
         state = json.loads(self.command("status").stdout)
         self.assertEqual(state["production"]["release_tag"], TAG)
+        self.assertEqual(state["production"]["source_commit"], COMMIT)
         self.assertIsNone(state["pending"])
         self.assertEqual((self.state / "state.json").stat().st_mode & 0o777, 0o600)
 
@@ -184,8 +196,9 @@ class PromotionTest(unittest.TestCase):
         options[5] = "3" * 64
         self.command("verify-deployment", *options, ok=False)
         options[5] = BUNDLE
-        options[-1] = stamp(timedelta(days=-2))
-        self.command("verify-deployment", *options, ok=False)
+        options[-3] = stamp(timedelta(hours=-49))
+        options[-1] = stamp(timedelta(hours=-48))
+        self.assertIn("stale", self.command("verify-deployment", *options, ok=False).stderr)
 
 
 if __name__ == "__main__":

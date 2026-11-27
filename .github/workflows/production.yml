@@ -81,9 +81,10 @@ jobs:
           [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
           [[ "$(gh api "repos/$GITHUB_REPOSITORY/branches/stable" --jq .commit.sha)" == "$CANDIDATE" ]]
           release=$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" |
-            jq -esc --arg tag "$TAG" '
-              [ .[][] | select(.tag_name == $tag and .draft and (.prerelease | not)
-                and (.body // "" | contains("<!-- jidu6111-managed -->"))) ]
+            jq -esc --arg tag "$TAG" --arg candidate "$CANDIDATE" '
+              [ .[][] | select(.tag_name == $tag and .draft == true and .prerelease == false
+                and .target_commitish == $candidate
+                and (.body // "" | split("\n") | index("<!-- jidu6111-managed -->") != null)) ]
               | if length == 1 then .[0] else error("Expected one managed Stable draft") end
             ')
           fetch_asset() {
@@ -127,6 +128,7 @@ jobs:
           MANIFEST_SHA: ${{ inputs.manifest_sha }}
           BUNDLE_SHA: ${{ inputs.bundle_sha }}
         run: |
+          set -euo pipefail
           expected=$(jq -er '.promotion.expected_worker_version' "$RUNNER_TEMP/release-manifest.json")
           current_worker() {
             pnpm exec wrangler deployments status --json |
@@ -148,14 +150,19 @@ jobs:
           done
           test "$(current_worker)" = "$version"
           url=$(jq -er '.vars.APP_ORIGIN | select(startswith("https://"))' wrangler.jsonc)
-          curl --fail --silent --show-error --max-time 15 --retry 4 "$url/api/v1/health" |
-            jq -e '.ok == true' >/dev/null
+          curl --fail --silent --show-error --max-time 15 --retry 4 "$url/api/v1/health" \
+            --output "$RUNNER_TEMP/worker-health.json"
+          jq -e '.ok == true' "$RUNNER_TEMP/worker-health.json" >/dev/null
+          dashboard_verified=false
           for attempt in 1 2 3 4 5; do
-            curl --fail --silent --show-error --compressed --max-time 15 "$url/" -o "$RUNNER_TEMP/dashboard.html"
-            if cmp -s "$RUNNER_TEMP/dashboard.html" "$RUNNER_TEMP/verified-monitor/dashboard/index.html"; then break; fi
+            if curl --fail --silent --show-error --compressed --max-time 15 "$url/" -o "$RUNNER_TEMP/dashboard.html" &&
+              cmp -s "$RUNNER_TEMP/dashboard.html" "$RUNNER_TEMP/verified-monitor/dashboard/index.html"; then
+              dashboard_verified=true
+              break
+            fi
             sleep 2
           done
-          cmp "$RUNNER_TEMP/dashboard.html" "$RUNNER_TEMP/verified-monitor/dashboard/index.html"
+          test "$dashboard_verified" = true
           printf 'Activated Worker version `%s`. Public health checks passed.\n' "$version" >>"$GITHUB_STEP_SUMMARY"
           receipt=$(jq -cn --arg candidate "$GITHUB_SHA" --arg release_tag "$TAG" \
             --arg manifest_sha "$MANIFEST_SHA" --arg bundle_sha "$BUNDLE_SHA" --arg worker_version "$version" \

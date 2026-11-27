@@ -31,8 +31,11 @@ TAGS = {
 
 
 def digest(path):
+    checksum = hashlib.sha256()
     with path.open("rb") as source:
-        return hashlib.file_digest(source, "sha256").hexdigest()
+        for block in iter(lambda: source.read(1024 * 1024), b""):
+            checksum.update(block)
+    return checksum.hexdigest()
 
 
 def checked_file(name):
@@ -59,7 +62,8 @@ def verify_local(directory, commit, *, check_feeds=True):
     if manifest_file.is_symlink() or manifest_file.stat().st_size > 1024 * 1024:
         raise ValueError("Invalid release manifest file")
     manifest = json.loads(manifest_file.read_text())
-    if not isinstance(manifest, dict) or manifest.get("schema") != 1 or manifest.get("source_commit") != commit:
+    if (not isinstance(manifest, dict) or type(manifest.get("schema")) is not int
+            or manifest["schema"] != 1 or manifest.get("source_commit") != commit):
         raise ValueError("Release manifest has the wrong schema or source commit")
     assets, profiles = manifest.get("assets"), manifest.get("profiles")
     if not isinstance(assets, dict) or not assets or not isinstance(profiles, list) or not profiles:
@@ -78,7 +82,8 @@ def verify_local(directory, commit, *, check_feeds=True):
         if (not isinstance(profile, dict) or not isinstance(profile.get("id"), str) or not NAME.fullmatch(profile["id"])
                 or profile["id"] in ids or profile.get("board") != BOARD
                 or profile.get("architecture") != "aarch64_cortex-a53"
-                or not NAME.fullmatch(str(profile.get("kernel", "")).replace("~", "-"))
+                or not isinstance(profile.get("kernel"), str)
+                or not NAME.fullmatch(profile["kernel"].replace("~", "-"))
                 or not HEX64.fullmatch(str(profile.get("key_sha256", "")))):
             raise ValueError("Invalid firmware compatibility profile")
         ids.add(profile["id"])
@@ -299,11 +304,14 @@ def guard_development_order(entries, target):
 def verify_consumed_development(github, candidate, assets):
     candidate_commit = github.tag_commit(candidate["tag_name"])
     previous = github.verify_draft(candidate, candidate_commit)
-    firmware_assets = {
-        name: info for name, info in previous.items()
-        if name.endswith((".bin", ".tar.gz")) and name != "monitor-bundle.tar.gz"
-    }
-    if not firmware_assets or any(assets.get(name) != expected for name, expected in firmware_assets.items()):
+    def firmware_assets(files):
+        return {
+            name: info for name, info in files.items()
+            if name.endswith((".bin", ".tar.gz")) and name != "monitor-bundle.tar.gz"
+        }
+
+    expected = firmware_assets(previous)
+    if not expected or firmware_assets(assets) != expected:
         raise ValueError("The consumed Development firmware and feed must match Stable exactly")
 
 

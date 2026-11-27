@@ -17,7 +17,7 @@ from release_workflow import GitHub, REPO
 
 def build_root():
     state = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local/state")
-    return Path(os.environ.get("JIDU6111_BUILD_ROOT") or state / "jidu6111/builds")
+    return Path(os.environ.get("JIDU6111_BUILD_ROOT") or state / "jidu6111/builds").resolve()
 
 
 def cleanup(root, *, apply):
@@ -27,7 +27,7 @@ def cleanup(root, *, apply):
         raise ValueError("Build workspace root is owned by a different user")
     candidates = []
     for path in sorted(root.iterdir()):
-        if not re.fullmatch(r"build\.[A-Za-z0-9]{8}", path.name):
+        if not re.fullmatch(r"build\.[A-Za-z0-9_]{8}", path.name):
             continue
         try:
             fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)

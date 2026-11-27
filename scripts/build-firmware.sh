@@ -10,6 +10,10 @@ usage() {
 
 fail() { printf '%s\n' "$*" >&2; exit 1; }
 
+# OpenWrt rejects PATH entries it cannot safely split. Apply this to direct script calls as well.
+PATH=$(printf '%s' "$PATH" | command -p awk -v RS=: '/^\// && !/[[:space:]]/ { printf "%s%s", separator, $0; separator = ":" }')
+export PATH
+
 project=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)
 commit= output= key= profile= jobs=4
 while (( $# )); do
@@ -79,7 +83,7 @@ trap 'rm -rf -- "$workspace"' EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 : > "$workspace/.jidu6111-owned"
-mkdir -p -- "$workspace/artifacts" "$workspace/tmp" "$workspace/cache"
+mkdir -p -- "$workspace/artifacts" "$workspace/tmp" "$workspace/cache" "$workspace/downloads"
 export TMPDIR="$workspace/tmp" XDG_CACHE_HOME="$workspace/cache" CCACHE_DISABLE=1
 export JIDU6111_RELEASE_BUILD=1
 
@@ -110,6 +114,8 @@ for current_profile in "${profiles[@]}"; do
     if [[ -d $workspace/pinned-source ]]; then
         cp -a --reflink=auto -- "$workspace/pinned-source" "$openwrt"
     fi
+    # The directory survives compiler-profile cleanup, and the workspace trap removes it.
+    ln -s -- "$workspace/downloads" "$openwrt/dl"
     openssl pkey -in "$key" -passin pass: -pubout -out "$openwrt/public-key.pem"
     ln -s -- "$key" "$openwrt/private-key.pem"
     make -C "$source" "configure-$current_profile"

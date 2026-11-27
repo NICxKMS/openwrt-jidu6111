@@ -300,7 +300,8 @@ def bootstrap(args):
 
 def verify(args):
     document = json.loads(safe_file(args.directory, 'release-manifest.json').read_text(encoding='utf-8'))
-    if document['schema'] != 1 or not document['profiles']:
+    schema = document.get('schema')
+    if type(schema) is not int or schema != 1 or not document['profiles']:
         raise ValueError('Invalid release manifest')
     for name, metadata in document['assets'].items():
         path = safe_file(args.directory, name)
@@ -313,8 +314,7 @@ def verify(args):
             if asset not in document['assets']:
                 raise ValueError(f'Missing manifest entry for {asset}')
         identity, _ = check_profile(args.apk, args.directory, profile['images'], profile['feed'])
-        if any(profile.get(field, value if field == 'firmware_revision' else None) != value
-               for field, value in identity.items()):
+        if any(profile.get(field) != value for field, value in identity.items()):
             raise ValueError(f'Manifest identity mismatch for {profile["id"]}')
         print(f'Verified {profile["id"]} firmware and APK feed for {identity["kernel"]}.')
 

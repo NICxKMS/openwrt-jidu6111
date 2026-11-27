@@ -12,6 +12,10 @@ on:
         type: choice
         options: [development, stable]
         required: true
+      source_commit:
+        description: Exact approved SHA for the selected source branch
+        type: string
+        required: true
       tag:
         description: Exact staged GitHub draft tag
         type: string
@@ -37,7 +41,7 @@ concurrency:
 
 jobs:
   reserve:
-    if: inputs.operation == 'reserve' && inputs.channel == 'stable' && github.ref == 'refs/heads/stable'
+    if: inputs.operation == 'reserve' && inputs.channel == 'stable' && github.ref == 'refs/heads/stable' && github.sha == inputs.source_commit
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -51,7 +55,7 @@ jobs:
         run: python3 -B scripts/release_workflow.py reserve --channel stable --tag "$TAG" --commit "$GITHUB_SHA"
 
   verify:
-    if: inputs.operation == 'publish' && github.ref == format('refs/heads/{0}', inputs.channel)
+    if: inputs.operation == 'publish' && github.ref == format('refs/heads/{0}', inputs.channel) && github.sha == inputs.source_commit
     uses: ./.github/workflows/nicx-router-monitor.yml
 
   publish:
@@ -105,8 +109,8 @@ jobs:
             jq -e '([.profiles[].id] | sort) == ["clang-thinlto", "gcc-kernel"] and
               all(.profiles[]; ([.images[].radio] | sort) == ["dual-band", "wcss-off"])'               "$assets/release-manifest.json" >/dev/null
           fi
-          docker run --rm -v "$PWD/scripts:/scripts:ro" -v "$assets:/assets:ro" alpine:3.23 \
-            sh -ec 'apk add --no-cache python3 squashfs-tools; python3 -B /scripts/firmware_artifacts.py verify --directory /assets --apk /sbin/apk'
+          docker run --rm -v "$PWD/scripts:/scripts:ro" -v "$assets:/assets:ro" alpine:3.23@sha256:469c9ea410b9215eaee7976ba6c0639039b444be8e5d638f7abbada189971eb2 \
+            sh -ec 'apk add --no-cache python3=3.12.16-r0 squashfs-tools=4.7.4-r0; python3 -B /scripts/firmware_artifacts.py verify --directory /assets --apk /sbin/apk'
           args=()
           if [[ "$CHANNEL" == stable && "$(jq -r '.promotion.kind' "$assets/release-manifest.json")" == firmware ]]; then
             [[ -n "$CONSUMED" ]] || { echo 'Firmware promotion must consume the verified Development tag.' >&2; exit 1; }

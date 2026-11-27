@@ -8,7 +8,7 @@ REFLASH_PROFILE := CONFIG_TARGET_DEVICE_qualcommbe_ipq95xx_DEVICE_jiorouter_ax60
 .PHONY: help host-deps source feeds configure configure-gcc-kernel configure-clang-thinlto menuconfig save-config check download build build-gcc-kernel build-clang-thinlto package package-index cache-stats
 
 # OpenWrt splits PATH on whitespace. Keep absolute entries it can pass intact.
-feeds configure configure-gcc-kernel configure-clang-thinlto menuconfig save-config download build build-gcc-kernel build-clang-thinlto package package-index cache-stats: export PATH := $(shell printf '%s' "$$PATH" | awk -v RS=: '/^\// && !/[[:space:]]/ { printf "%s%s", separator, $$0; separator = ":" }')
+feeds configure configure-gcc-kernel configure-clang-thinlto menuconfig save-config download build build-gcc-kernel build-clang-thinlto package package-index cache-stats build-firmware: export PATH := $(shell printf '%s' "$$PATH" | awk -v RS=: '/^\// && !/[[:space:]]/ { printf "%s%s", separator, $$0; separator = ":" }')
 
 help:
 	@printf '%s\n' \
@@ -37,6 +37,10 @@ help:
 	  'make promote                 Request approval to publish verified production' \
 	  'make verify-router           Read board, installed packages and trust fingerprints' \
 	  'make cleanup                 Preview removal of abandoned owned builds' \
+	  'make repo-status             Show the checkout and private promotion state' \
+	  'make dev-up                  Run the disposable monitoring stack' \
+	  'make dev-down                Clean abandoned monitoring stacks' \
+	  'make cache-stats             Inspect existing interactive compiler caches' \
 	  'make storage-report          Report build storage, with REMOTE=1 for GitHub'
 
 host-deps:

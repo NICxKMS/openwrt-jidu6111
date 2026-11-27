@@ -76,6 +76,12 @@ class PublicationTests(unittest.TestCase):
             release.publish(self.github, "development", self.new["tag_name"], COMMIT)
         self.github.delete.assert_not_called()
 
+    def test_consumption_rejects_extra_firmware_and_feeds(self):
+        firmware = {"original.bin": {"sha256": "a" * 64}, "feed.tar.gz": {"sha256": "b" * 64}}
+        self.github.verify_draft.return_value = firmware
+        with self.assertRaisesRegex(ValueError, "match Stable"):
+            release.verify_consumed_development(self.github, self.old, {**firmware, "other.bin": {}})
+
     def test_same_commit_retry_cannot_replace_a_newer_verified_candidate(self):
         newer = entry("v1.1.0-dev.3.1", release_id=3)
         self.github.releases.return_value = [newer, self.new, self.old]
@@ -121,6 +127,23 @@ class ManifestTests(unittest.TestCase):
         (self.directory / "image.bin").write_bytes(b"corrupt")
         with self.assertRaisesRegex(ValueError, "checksum"):
             release.verify_local(self.directory, COMMIT)
+
+    def test_rejects_an_undeclared_staging_file(self):
+        (self.directory / "release-manifest.json").write_text(json.dumps(self.manifest))
+        (self.directory / "extra.txt").write_text("not an asset")
+        with self.assertRaisesRegex(ValueError, "only manifest assets"):
+            release.verify_local(self.directory, COMMIT)
+
+    def test_invalid_schema_and_kernel_are_rejected_before_staging(self):
+        path = self.directory / "release-manifest.json"
+        for field, value in (("schema", True), ("kernel", None)):
+            with self.subTest(field=field):
+                invalid = json.loads(json.dumps(self.manifest))
+                destination = invalid if field == "schema" else invalid["profiles"][0]
+                destination[field] = value
+                path.write_text(json.dumps(invalid))
+                with self.assertRaises(ValueError):
+                    release.verify_local(self.directory, COMMIT)
 
 
 class GitHubTests(unittest.TestCase):

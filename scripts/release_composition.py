@@ -28,7 +28,9 @@ def components(paths):
     for path in paths:
         if path.endswith(DOC_SUFFIXES):
             continue
-        if path.startswith(("config/", "sources/", "scripts/configure-", "scripts/bootstrap-",
+        if path == "Makefile":
+            result.update(("release", "firmware", "packages"))
+        elif path.startswith(("config/", "sources/", "scripts/configure-", "scripts/bootstrap-",
                             "scripts/build-firmware", "scripts/firmware_artifacts")):
             result.update(("firmware", "packages"))
         elif path.startswith(MONITOR + "packages/shared/"):
@@ -40,7 +42,7 @@ def components(paths):
                           if path.startswith(directory + "/"))
             if path.startswith(COMPONENT_PATHS["agent"] + "/"):
                 result.add("packages")
-        elif path.startswith((".github/", "scripts/", "Makefile")):
+        elif path.startswith((".github/", "scripts/")):
             result.add("release")
         else:
             return ALL.copy()
@@ -87,19 +89,21 @@ def compose(args):
         manifest["monitoring"] = json.loads(args.observed_components.read_text())
     elif not args.promotion:
         manifest["monitoring"] = monitor_provenance(args.commit)
-    elif "monitoring" not in manifest:
-        raise ValueError("Provide reviewed public component pins with --observed-components for Stable")
+    else:
+        raise ValueError("Provide reviewed public component pins with --observed-components for every Stable promotion")
     target = args.directory / "monitor-bundle.tar.gz"
-    if args.bundle:
-        if target.resolve() == args.bundle.resolve():
-            raise ValueError("Provide the verified bundle from outside the release directory")
-        if target.exists():
-            raise ValueError("Compose into a directory without a previous Worker bundle")
-        shutil.copyfile(args.bundle, target)
-        manifest["assets"][target.name] = {"sha256": digest(target), "size": target.stat().st_size}
     with tempfile.TemporaryDirectory(dir=args.directory.parent, prefix="release-manifest-") as stage:
-        temporary = Path(stage) / MANIFEST
+        staged = Path(stage)
+        if args.bundle:
+            if target.resolve() == args.bundle.resolve():
+                raise ValueError("Provide the verified bundle from outside the release directory")
+            bundle = staged / target.name
+            shutil.copyfile(args.bundle, bundle)
+            manifest["assets"][target.name] = {"sha256": digest(bundle), "size": bundle.stat().st_size}
+        temporary = staged / MANIFEST
         temporary.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+        if args.bundle:
+            bundle.replace(target)
         temporary.replace(manifest_path)
 
 

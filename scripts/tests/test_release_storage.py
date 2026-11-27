@@ -4,17 +4,28 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from release_storage import cleanup
+from release_storage import build_root, cleanup
 
 
 class ScratchCleanupTests(unittest.TestCase):
+    def test_configured_build_root_resolves_symlinks_like_builder(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            actual = root / "actual"
+            actual.mkdir()
+            link = root / "link"
+            link.symlink_to(actual, target_is_directory=True)
+            with patch.dict(os.environ, {"JIDU6111_BUILD_ROOT": str(link)}):
+                self.assertEqual(build_root(), actual.resolve())
+
     def test_only_removes_owned_unlocked_builds(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             active = root / "build.acd12345"
-            abandoned = root / "build.12345acd"
+            abandoned = root / "build.12345a_d"
             unrelated = root / "build.aaaaaaaa"
             for path in (active, abandoned, unrelated):
                 path.mkdir()

@@ -1,14 +1,16 @@
+import json
 import os
 import subprocess
 import sys
 import tempfile
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 from pathlib import Path
 
 SCRIPTS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SCRIPTS))
-from firmware_artifacts import check_profile, installed_packages, validate_index
+from firmware_artifacts import BOARD, check_profile, installed_packages, validate_index, verify
 
 
 class FirmwareArtifactTests(unittest.TestCase):
@@ -60,16 +62,20 @@ class FirmwareArtifactTests(unittest.TestCase):
             make = tools / 'make'
             make.write_text(
                 '#!/bin/sh\nset -eu\n'
+                'case ":$PATH:" in *:./relative-bin:*|*:"/path with spaces":*) exit 70;; esac\n'
                 'test "$(git -C "$2" rev-parse HEAD)" = "$CANDIDATE_COMMIT"\n'
                 'grep -Fqx "src-git nicx_monitor file://$2^$CANDIDATE_COMMIT" "$2/sources/feeds.conf"\n'
                 'printf "source preparation stopped\\n" >&2\nexit 73\n', encoding='utf-8',
             )
             make.chmod(0o700)
+            unsquashfs = tools / 'unsquashfs'
+            unsquashfs.write_text('#!/bin/sh\nexit 99\n', encoding='utf-8')
+            unsquashfs.chmod(0o700)
             signing_key = parent / 'key.pem'
             signing_key.write_text('unused because source preparation fails')
             output = parent / 'release'
             builds = parent / 'builds'
-            env = {**os.environ, 'PATH': f'{tools}:{os.environ["PATH"]}',
+            env = {**os.environ, 'PATH': f'{tools}:./relative-bin:/path with spaces:{os.environ["PATH"]}',
                    'JIDU6111_BUILD_ROOT': str(builds), 'CANDIDATE_COMMIT': commit}
             result = subprocess.run(['bash', str(SCRIPTS / 'build-firmware.sh'), '--commit', commit,
                                      '--profile', 'gcc-kernel', '--output', str(output),
@@ -90,3 +96,26 @@ class FirmwareArtifactTests(unittest.TestCase):
             with patch('firmware_artifacts.inspect_image', return_value=identity):
                 with self.assertRaisesRegex(ValueError, 'same binary'):
                     check_profile('unused', folder, images, 'unused-feed.tar.gz')
+
+    def test_verifier_rejects_invalid_schema_types_and_missing_revision(self):
+        identity = {'architecture': 'aarch64_cortex-a53', 'kernel': '6.18.65~abcdef-r1',
+                    'firmware_revision': 'r0+123-test', 'key_sha256': '0' * 64}
+        for schema, revision, error in ((True, 'r0+123-test', 'Invalid release manifest'),
+                                        (1.0, 'r0+123-test', 'Invalid release manifest'),
+                                        (1, None, 'Manifest identity mismatch')):
+            with self.subTest(schema=schema, revision=revision), tempfile.TemporaryDirectory() as temporary:
+                directory = Path(temporary)
+                profile = {'id': 'legacy', 'board': BOARD, 'architecture': identity['architecture'],
+                           'kernel': identity['kernel'], 'key_sha256': identity['key_sha256'],
+                           'feed': 'test-feed.tar.gz', 'images': []}
+                if revision is not None:
+                    profile['firmware_revision'] = revision
+                (directory / profile['feed']).write_bytes(b'test')
+                (directory / 'release-manifest.json').write_text(json.dumps({
+                    'schema': schema, 'profiles': [profile], 'assets': {
+                        profile['feed']: {'size': 4, 'sha256': '9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08'},
+                    },
+                }), encoding='utf-8')
+                with patch('firmware_artifacts.check_profile', return_value=(identity, {})):
+                    with self.assertRaisesRegex(ValueError, error):
+                        verify(SimpleNamespace(directory=directory, apk='unused'))
