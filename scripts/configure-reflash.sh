@@ -27,7 +27,7 @@ if ! monitor_status=$(git -C feeds/nicx_monitor status --porcelain --untracked-f
     exit 1
 fi
 for package in nicx-telemetry luci-app-nicx-telemetry; do
-    source="feeds/nicx_monitor/nicx-router-monitor/openwrt/$package"
+    source="feeds/nicx_monitor/openwrt/$package"
     destination="package/feeds/nicx_monitor/$package"
     if [[ -e "package/$package" || -L "package/$package" || ! "$source" -ef "$destination" ]]; then
         printf 'Expected %s from the pinned Nicx Monitor feed. Run make feeds in a clean OpenWrt checkout.\n' "$package" >&2

@@ -64,7 +64,8 @@ class FirmwareArtifactTests(unittest.TestCase):
                 '#!/bin/sh\nset -eu\n'
                 'case ":$PATH:" in *:./relative-bin:*|*:"/path with spaces":*) exit 70;; esac\n'
                 'test "$(git -C "$2" rev-parse HEAD)" = "$CANDIDATE_COMMIT"\n'
-                'grep -Fqx "src-git nicx_monitor file://$2^$CANDIDATE_COMMIT" "$2/sources/feeds.conf"\n'
+                'git -C "$2" diff --exit-code HEAD -- sources/feeds.conf\n'
+                'grep -Eq "^src-git nicx_monitor https://github[.]com/NICxKMS/openwrt-router-monitor[.]git\\^[0-9a-f]{40}$" "$2/sources/feeds.conf"\n'
                 'printf "source preparation stopped\\n" >&2\nexit 73\n', encoding='utf-8',
             )
             make.chmod(0o700)
