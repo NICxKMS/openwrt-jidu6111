@@ -151,7 +151,7 @@ install-packages:
 
 verify-router:
 	@ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=10 -- "root@$${JIDU_OP_ROUTER:-192.168.50.1}" \
-	  'ubus call system board && apk info -v kernel nicx-telemetry luci-app-nicx-telemetry && cat /etc/apk/arch && sha256sum /etc/apk/keys/*.pem'
+	  'ubus call system board && apk --no-cache --repositories-file /dev/null query --from installed --fields name,version --format json kernel nicx-telemetry luci-app-nicx-telemetry && cat /etc/apk/arch && sha256sum /etc/apk/keys/*.pem'
 
 release-dev:
 	@bash scripts/release-operator.sh development
