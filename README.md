@@ -2,6 +2,14 @@
 
 This workspace builds the community `qualcommbe/ipq95xx` profile for the JIDU6111 on Linux **6.18.65**. The editable OpenWrt checkout is `openwrt/`. The base image includes LuCI with HTTPS, routing, DHCP, DNS, firewall, Ethernet and USB controller drivers, and both ath11k radios with their firmware and JIDU board data.
 
+## Release channels
+
+[GitHub Releases](https://github.com/NICxKMS/openwrt-jidu6111/releases) distributes firmware and signed APK feeds. **Stable** is the GitHub Latest release for the verified production setup. **Development** is the verified prerelease when a distinct candidate exists. Each release includes the named image variants, matching signed feeds and a manifest of sources, compatibility and verification.
+
+Run `make install-packages` on the management computer to open the package dashboard. It checks the router over SSH, downloads the compatible feed and serves it for the installation session. Use `CHANNEL=development` to choose Development or `FEED=/path/to/packages` to use a matching local feed. Verify the router's SSH host key before connecting. The [legacy feed](https://github.com/NICxKMS/openwrt-jidu6111/tree/router) stays available during cutover.
+
+See [Release operations](docs/release-operations.md) for scoped builds, publication, promotion, recovery and cleanup.
+
 ## Install build tools and build
 
 Run these in your Ubuntu or Debian terminal as your normal user. `make host-deps` uses `sudo` to install the system packages. `make source` applies the tracked patches and board data to the pinned OpenWrt checkout. You can reuse a checkout prepared with the same wrapper revision. When updating the wrapper, save any local changes and move the previous generated `openwrt/` checkout aside before running `make source` so the current overlays and feed pins are applied.
@@ -72,7 +80,7 @@ The firmware installs the agent version pinned in the [package feed list](source
 
 The standard `make build` writes firmware images, the build manifest, and checksums to `openwrt/bin/targets/qualcommbe/ipq95xx/`. Target APKs are under that target directory and feed APKs are in `openwrt/bin/packages/`.
 
-Downloads are reused from `openwrt/dl/`. The JIDU6111 profile enables compiler caching in `openwrt/.ccache/` and per-component logs in `openwrt/logs/`. `make cache-stats` reports compiler cache hits and size. Incremental builds reuse the existing toolchain and build files in `openwrt/staging_dir/` and `openwrt/build_dir/`. `make distclean` removes these build files, downloads, cache, and APK signing keys.
+The interactive OpenWrt targets share the generated checkout in your worktree. Use them for local experiments. Release builds use the isolated `make build-firmware` entry point, keep downloads and intermediates in its disposable workspace and preserve the independently stored signing key.
 
 ## Add packages
 
