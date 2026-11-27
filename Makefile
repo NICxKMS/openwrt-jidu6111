@@ -29,7 +29,6 @@ help:
 	  'make package PACKAGE=<name>   Build a selected package and its dependencies' \
 	  'make package-index           Refresh the signed APK indexes and combined repository' \
 	  'make build-firmware          Build from an exact commit in a disposable workspace' \
-	  'make install-packages        Open the matching signed-feed package dashboard' \
 	  'make test-release            Run release, installer and promotion tests' \
 	  'make release-dev             Stage verified assets and request Development publication' \
 	  'make reserve-stable          Reserve a Stable draft for an approved promotion' \
@@ -38,8 +37,6 @@ help:
 	  'make verify-router           Read board, installed packages and trust fingerprints' \
 	  'make cleanup                 Preview removal of abandoned owned builds' \
 	  'make repo-status             Show the checkout and private promotion state' \
-	  'make dev-up                  Run the disposable monitoring stack' \
-	  'make dev-down                Clean abandoned monitoring stacks' \
 	  'make cache-stats             Inspect existing interactive compiler caches' \
 	  'make storage-report          Report build storage, with REMOTE=1 for GitHub'
 
@@ -131,31 +128,20 @@ package-index: check
 cache-stats:
 	CCACHE_DIR="$(CURDIR)/openwrt/.ccache" ccache --show-stats
 
-.PHONY: build-firmware install-packages verify-router release-dev reserve-stable stage-stable promote cleanup storage-report repo-status test-release dev-up dev-down
+.PHONY: build-firmware verify-router release-dev reserve-stable stage-stable promote cleanup storage-report repo-status test-release
 
 export JIDU_OP_COMMIT := $(COMMIT)
 export JIDU_OP_TAG := $(TAG)
 export JIDU_OP_OUTPUT := $(OUTPUT)
 export JIDU_OP_SIGNING_KEY := $(SIGNING_KEY)
 export JIDU_OP_BUILD_PROFILE := $(BUILD_PROFILE)
-export JIDU_OP_FEED_PROFILE := $(FEED_PROFILE)
 export JIDU_OP_ROUTER := $(ROUTER)
-export JIDU_OP_FEED := $(FEED)
-export JIDU_OP_CHANNEL := $(CHANNEL)
 export JIDU_OP_CONSUME := $(CONSUME_DEVELOPMENT)
 
 build-firmware:
 	@set -eu; set --; if [ -n "$$JIDU_OP_BUILD_PROFILE" ]; then set -- --profile "$$JIDU_OP_BUILD_PROFILE"; fi; \
 	  bash scripts/build-firmware.sh --commit "$$JIDU_OP_COMMIT" --output "$$JIDU_OP_OUTPUT" \
 	    --signing-key "$$JIDU_OP_SIGNING_KEY" --jobs "$(JOBS)" "$$@"
-
-install-packages:
-	@set -eu; set --; \
-	  if [ -n "$$JIDU_OP_ROUTER" ]; then set -- "$$@" --router "$$JIDU_OP_ROUTER"; fi; \
-	  if [ -n "$$JIDU_OP_FEED" ]; then set -- "$$@" --feed "$$JIDU_OP_FEED"; \
-	  elif [ -n "$$JIDU_OP_CHANNEL" ]; then set -- "$$@" --channel "$$JIDU_OP_CHANNEL"; fi; \
-	  if [ -n "$$JIDU_OP_FEED_PROFILE" ]; then set -- "$$@" --profile "$$JIDU_OP_FEED_PROFILE"; fi; \
-	  python3 -B scripts/install-packages.py "$$@"
 
 verify-router:
 	@ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=10 -- "root@$${JIDU_OP_ROUTER:-192.168.50.1}" \
@@ -186,10 +172,3 @@ repo-status:
 
 test-release:
 	@python3 -B -m unittest discover -s scripts/tests -v
-
-
-dev-up:
-	@python3 -B nicx-router-monitor/scripts/dev-stack.py
-
-dev-down:
-	@python3 -B nicx-router-monitor/scripts/dev-stack.py --cleanup

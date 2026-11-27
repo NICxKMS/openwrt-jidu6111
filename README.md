@@ -6,7 +6,7 @@ This workspace builds the community `qualcommbe/ipq95xx` profile for the JIDU611
 
 [GitHub Releases](https://github.com/NICxKMS/openwrt-jidu6111/releases) distributes firmware and signed APK feeds. **Stable** is the GitHub Latest release for the verified production setup. **Development** is the verified prerelease when a distinct candidate exists. Each release includes the named image variants, matching signed feeds and a manifest of sources, compatibility and verification.
 
-Run `make install-packages ROUTER=192.168.1.1` on the management computer to open the package dashboard. Set `ROUTER` to your current LAN address if it differs. It checks the router over SSH, downloads the compatible feed and serves it for the installation session. Use `CHANNEL=development` to choose Development or `FEED=/path/to/packages` to use a matching local feed. Verify the router's SSH host key before connecting. The [legacy feed](https://github.com/NICxKMS/openwrt-jidu6111/tree/router) stays available during cutover.
+From [openwrt-router-monitor](https://github.com/NICxKMS/openwrt-router-monitor), run `python3 -B scripts/install-packages.py --router 192.168.1.1` on the management computer to open the package dashboard. Use your router's LAN address and verify the SSH host key. The dashboard discovers matching feeds from this repository. Use `--channel development` to select Development or `--feed /path/to/packages` for a local feed, including a download from the [legacy feed](https://github.com/NICxKMS/openwrt-jidu6111/tree/router).
 
 See [Release operations](docs/release-operations.md) for scoped builds, publication, promotion, recovery and cleanup.
 

@@ -53,7 +53,14 @@ def git(*args, text=True):
     return subprocess.check_output(["git", *args], text=text)
 
 
-def monitor_provenance(commit):
+def monitor_provenance(commit, profiles):
+    if not git("ls-tree", "--name-only", commit, MONITOR.rstrip("/")).strip():
+        bundled = {}
+        for profile in profiles:
+            if not profile.get("monitoring"):
+                raise ValueError("Provide observed component pins when the firmware manifest lacks bundled monitor provenance")
+            bundled[profile["id"]] = profile["monitoring"]
+        return {"bundled_by_profile": bundled}
     versions = {}
     for name, path in COMPONENT_PATHS.items():
         last_change = git("log", "-1", "--format=%H", commit, "--", path).strip()
@@ -88,7 +95,7 @@ def compose(args):
     if args.observed_components:
         manifest["monitoring"] = json.loads(args.observed_components.read_text())
     elif not args.promotion:
-        manifest["monitoring"] = monitor_provenance(args.commit)
+        manifest["monitoring"] = monitor_provenance(args.commit, manifest["profiles"])
     else:
         raise ValueError("Provide reviewed public component pins with --observed-components for every Stable promotion")
     target = args.directory / "monitor-bundle.tar.gz"

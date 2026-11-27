@@ -56,7 +56,7 @@ jobs:
 
   verify:
     if: inputs.operation == 'publish' && github.ref == format('refs/heads/{0}', inputs.channel) && github.sha == inputs.source_commit
-    uses: ./.github/workflows/nicx-router-monitor.yml
+    uses: ./.github/workflows/firmware-checks.yml
 
   publish:
     needs: verify
