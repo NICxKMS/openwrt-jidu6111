@@ -16,6 +16,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       monitor: ${{ steps.paths.outputs.monitor }}
+      feed: ${{ steps.paths.outputs.feed }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -28,10 +29,14 @@ jobs:
         run: |
           if [[ "$EVENT" == workflow_dispatch ]] || ! git cat-file -e "$BASE^{commit}" 2>/dev/null; then
             echo 'monitor=true' >> "$GITHUB_OUTPUT"
+            echo 'feed=true' >> "$GITHUB_OUTPUT"
           else
             git diff --name-only "$BASE" HEAD > "$RUNNER_TEMP/changed-files"
             if grep -Eq '^(Makefile$|nicx-router-monitor/|sources/feeds[.]conf$|[.]github/workflows/|scripts/(release|install-packages|package_dashboard))' "$RUNNER_TEMP/changed-files"; then
               echo 'monitor=true' >> "$GITHUB_OUTPUT"
+            fi
+            if grep -Eq '^(Makefile$|config/|sources/|scripts/(apply-feed-patches|bootstrap-source|build-firmware|configure-reflash|firmware_artifacts)[.]|[.]github/workflows/nicx-router-monitor[.]yml$)' "$RUNNER_TEMP/changed-files"; then
+              echo 'feed=true' >> "$GITHUB_OUTPUT"
             fi
           fi
       - run: |
@@ -80,13 +85,34 @@ jobs:
       - if: always()
         run: rm -rf -- "$RUNNER_TEMP/pnpm" "$RUNNER_TEMP/nicx-test-tools" "$RUNNER_TEMP/nicx-agent-fixture.json"
 
+  verify-feed:
+    needs: scope
+    if: needs.scope.outputs.feed == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Verify the pinned monitoring package metadata
+        run: |
+          make source
+          cd openwrt
+          # The LuCI monitoring recipe imports the pinned LuCI feed's luci.mk.
+          ./scripts/feeds update luci nicx_monitor
+          pin=$(awk '$2 == "nicx_monitor" { sub(/^.*\^/, "", $3); print $3 }' feeds.conf)
+          [[ "$pin" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git -C feeds/nicx_monitor rev-parse HEAD)" = "$pin"
+          grep -Fqx 'Package: nicx-telemetry' feeds/nicx_monitor.index
+          grep -Fqx 'Package: luci-app-nicx-telemetry' feeds/nicx_monitor.index
+
   required:
     name: Required repository checks
     if: always()
-    needs: [scope, verify]
+    needs: [scope, verify, verify-feed]
     runs-on: ubuntu-latest
     env:
       SCOPE: ${{ needs.scope.result }}
       MONITOR: ${{ needs.verify.result }}
+      FEED: ${{ needs.verify-feed.result }}
     steps:
-      - run: '[[ "$SCOPE" == success && ( "$MONITOR" == success || "$MONITOR" == skipped ) ]]'
+      - run: '[[ "$SCOPE" == success && ( "$MONITOR" == success || "$MONITOR" == skipped ) && ( "$FEED" == success || "$FEED" == skipped ) ]]'
