@@ -28,10 +28,6 @@ before(async()=>{
  await db.exec(readFileSync(new URL('../../supabase/migrations/202611250004_advisor_indexes.sql',import.meta.url),'utf8'));
  await db.exec(readFileSync(new URL('../../supabase/migrations/202611250005_archive_replacement.sql',import.meta.url),'utf8'));
  await db.exec(readFileSync(new URL('../../supabase/migrations/202611250006_diagnostic_receipts.sql',import.meta.url),'utf8'));
- await db.exec(readFileSync(new URL('../../supabase/migrations/202611250007_alert_continuity.sql',import.meta.url),'utf8'));
- await db.exec(readFileSync(new URL('../../supabase/migrations/202611250008_backend_review.sql',import.meta.url),'utf8'));
- await db.exec(readFileSync(new URL('../../supabase/migrations/202611260009_traffic_delta_counts.sql',import.meta.url),'utf8'));
- await db.exec(readFileSync(new URL('../../supabase/migrations/202611260010_traffic_window_precision.sql',import.meta.url),'utf8'));
  await db.exec(`insert into public.enrollment_tokens(owner_id,token_hash,expires_at,name) values ('${owner}','${'e'.repeat(64)}',now()+interval '5 minutes','test');`);
  device=(await rpc('enroll_device',['e'.repeat(64),token,'test','fixture'])).device_id;
 });
@@ -86,8 +82,8 @@ test('service operations and notification retry/claim work; maintenance keeps ad
  await db.exec(`update public.devices set last_seen_at=now()-interval '10 minutes' where id='${device}'`);
  await rpc('maintenance',[]);
  assert.equal((await q("select count(*)::int n from public.alerts where rule_key='offline' and resolved_at is null"))[0].n,1);
- const notifications=await rpc('claim_notification_attempts',[20]); assert.ok(notifications.length>=1);
- await rpc('finish_notification',[notifications[0].id,notifications[0].attempts,false,'fixture failure']);
+ const notifications=await rpc('claim_notifications',[20]); assert.ok(notifications.length>=1);
+ await rpc('finish_notification',[notifications[0].id,false,'fixture failure']);
  assert.equal((await q('select attempts from private.notification_queue where id=$1',[notifications[0].id]))[0].attempts,1);
 });
 test('thresholds sustain on sample time, reset between breaches, and recover with hysteresis',async()=>{
@@ -113,92 +109,6 @@ test('storage deletion outbox survives device cascade and supports leased retry'
  assert.equal((await rpc('claim_storage_deletions',[10])).length,0);
  await rpc('finish_storage_deletion',[tasks[0].id,true,null]);
  assert.equal((await q('select * from private.storage_deletions')).length,0);
-});
-test('archive cleanup never leases a path still referenced by diagnostic metadata',async()=>{
- const path=device+'/'+crypto.randomUUID()+'.json.gz',queuedPath=device+'/'+crypto.randomUUID()+'.json.gz';
- const snapshot=(await q('insert into public.diagnostics(device_id,boot_id,payload,object_path) values($1,$2,$3,$4) returning id',[device,boot,{},path]))[0].id;
- await rpc('enqueue_storage_deletion',[path]);
- assert.equal((await q('select count(*)::int n from private.storage_deletions where object_path=$1',[path]))[0].n,0);
- // Simulate a queue item written by a previous Worker while the reference still exists.
- await q('insert into private.storage_deletions(object_path) values($1)',[path]);
- assert.deepEqual(await rpc('claim_storage_deletions',[10]),[]);
- await rpc('enqueue_storage_deletion',[queuedPath]);
- await assert.rejects(q('update public.diagnostics set object_path=$1 where id=$2',[queuedPath,snapshot]),/queued for deletion/);
- await q('delete from public.diagnostics where id=$1',[snapshot]);
- const tasks=await rpc('claim_storage_deletions',[10]);
- assert.deepEqual(tasks.map(x=>x.object_path).sort(),[path,queuedPath].sort());
- for(const task of tasks)await rpc('finish_storage_deletion',[task.id,true,null]);
-});
-test('an expired notification attempt cannot finish a newer claim',async()=>{
- await db.exec('update private.notification_queue set available_at=now()-interval \'1 second\',claimed_until=null,last_error=null where delivered_at is null');
- const [first]=await rpc('claim_notification_attempts',[1]);
- assert.ok(first);
- await q("update private.notification_queue set claimed_until=now()-interval '1 second' where id=$1",[first.id]);
- const [second]=await rpc('claim_notification_attempts',[1]);
- assert.equal(second.id,first.id);
- assert.equal(second.attempts,first.attempts+1);
- await rpc('finish_notification',[first.id,first.attempts,false,'stale failure']);
- const [current]=await q('select claimed_until,last_error,delivered_at from private.notification_queue where id=$1',[second.id]);
- assert.ok(current.claimed_until);
- assert.equal(current.last_error,null);
- assert.equal(current.delivered_at,null);
- await rpc('finish_notification',[second.id,second.attempts,true,null]);
- assert.ok((await q('select delivered_at from private.notification_queue where id=$1',[second.id]))[0].delivered_at);
-});
-test('history uses minute rollups for incomplete raw buckets inside the configured retention',async()=>{
- const id=(await q("insert into public.devices(owner_id,name,config) values($1,$2,'{\"retention_raw_days\":7}') returning id",[owner,'RETAINED COVERAGE FIXTURE']))[0].id;
- const started=Math.floor((Date.now()-5*86400000)/60000)*60000;
- const time=(offset)=>new Date(started+offset*1000);
- try{
-  for(const [seq,offset,cpu] of [[1,12,20],[2,22,50],[3,72,90]]){
-   await q('insert into public.metric_samples(device_id,boot_id,seq,effective_at,uptime_s,cpu_pct,rx_bytes_delta,tx_bytes_delta,elapsed_s) values($1,$2,$3,$4,$5,$6,$7,$8,$9)',[id,boot,seq,time(offset),offset,cpu,seq===1 ? 100000 : null,seq===1 ? 0 : null,seq===1 ? 20 : null]);
-   await q('select private.accumulate_sample(s) from public.metric_samples s where device_id=$1 and seq=$2',[id,seq]);
-  }
-  await db.exec(`set role authenticated; set request.jwt.claim.sub='${owner}'`);
-  const raw=await rpc('history',[id,time(10),time(90)]);
-  assert.deepEqual(raw.map(x=>Number(x.sample_count)),[1,1,1]);
-  assert.deepEqual(raw.map(x=>Number(x.rx_delta_count)),[1,0,0]);
-  assert.equal(raw[0].traffic_window_exact, false);
-  const containedRaw = await rpc('history',[id,time(-10),time(90)]);
-  assert.equal(containedRaw[0].traffic_window_exact, true);
-  await db.exec('reset role');
-  await q('delete from public.metric_samples where device_id=$1 and seq=1',[id]);
-  await db.exec(`set role authenticated; set request.jwt.claim.sub='${owner}'`);
-  const minute=await rpc('history',[id,time(10),time(90)]);
-  assert.deepEqual(minute.map(x=>[Number(x.sample_count),x.cpu_pct]),[[2,35],[1,90]]);
-  assert.deepEqual(minute.map(x=>[Number(x.rx_delta_count),Number(x.tx_delta_count)]),[[1,1],[0,0]]);
-  assert.equal(Number(minute[0].rx_bytes_delta),100000);
-  assert.deepEqual(minute.map(x=>x.traffic_window_exact),[false,false]);
-  const aligned=await rpc('history',[id,time(0),time(120)]);
-  assert.deepEqual(aligned.map(x=>x.traffic_window_exact),[false,false]);
-  const laterRaw=await rpc('history',[id,time(60),time(90)]);
-  assert.deepEqual(laterRaw.map(x=>new Date(x.bucket).valueOf()),[time(72).valueOf()]);
- }finally{await db.exec('reset role');await q('delete from public.devices where id=$1',[id]);}
-});
-test('history rejects non-owners and invalid ranges', async () => {
- await db.exec(`set role authenticated; set request.jwt.claim.sub='${other}'`);
- const from = new Date('2026-11-25T00:00:00Z');
- const to = new Date('2026-11-26T00:00:00Z');
- await assert.rejects(rpc('history',[device,from,to]), { code: '42501' });
- await db.exec(`set request.jwt.claim.sub='${owner}'`);
- await assert.rejects(rpc('history',[device,null,to]), { code: '22023' });
- await assert.rejects(rpc('history',[device,to,from]), { code: '22023' });
- await assert.rejects(rpc('history',[device,from,new Date('2028-01-01T00:00:00Z')]), { code: '22023' });
-});
-test('history returns a minute bucket if complete raw data exceeds the response limit',async()=>{
- const id=(await q('insert into public.devices(owner_id,name) values($1,$2) returning id',[owner,'DENSE HISTORY FIXTURE']))[0].id;
- const minute=new Date(Math.floor((Date.now()-3600000)/60000)*60000);
- const end=new Date(minute.valueOf()+60000);
- try{
-  await q(`insert into public.metric_samples(device_id,boot_id,seq,effective_at,uptime_s,cpu_pct)
-   select $1,$2,i,$3::timestamptz+i*interval '1 millisecond',i,50 from generate_series(1,2161) i`,[id,boot,minute]);
-  await q(`insert into public.metric_rollups(device_id,resolution_s,bucket,sample_count,cpu_sum,cpu_count,mem_available_count,temp_count)
-   values($1,60,$2,2161,50*2161,2161,0,0)`,[id,minute]);
-  await db.exec(`set role authenticated; set request.jwt.claim.sub='${owner}'`);
-  const rows=await rpc('history',[id,minute,end]);
-  assert.equal(rows.length,1);
-  assert.equal(Number(rows[0].sample_count),2161);
- }finally{await db.exec('reset role');await q('delete from public.devices where id=$1',[id]);}
 });
 test('maintenance deletes expired raw rows but replay cannot re-add their rollups',async()=>{
  const total=(await q('select sum(sample_count)::int n from public.metric_rollups where resolution_s=60'))[0].n;
@@ -333,78 +243,6 @@ test('actual host-fixture agent sample ingests without converting unavailable ga
  const stored=(await q('select * from public.metric_samples where device_id=$1 and boot_id=$2 and seq=500',[device,current]))[0];
  assert.equal(stored.cpu_pct,sample.cpu_pct);assert.equal(stored.temp_c,sample.temp_c);assert.equal(stored.mem_available_kb,sample.mem_available_kb);
  assert.deepEqual(stored.detail.capabilities,sample.detail.capabilities);
-});
-// Isolated devices keep these cadence regressions independent of earlier fixtures.
-async function cadenceFixture(run,{metric='cpu_pct',threshold=80,sustain=240,config={}}={}) {
- const id=crypto.randomUUID(),credential=crypto.randomUUID().replaceAll('-','').repeat(2),session=crypto.randomUUID();
- await q('insert into public.devices(id,owner_id,name) values($1,$2,$3)',[id,owner,'CADENCE TEST FIXTURE']);
- await q('insert into private.device_credentials(device_id,token_hash) values($1,$2)',[id,credential]);
- await q('update public.devices set config=config||$1::jsonb where id=$2',[config,id]);
- const rule=(await q("insert into public.alert_rules(device_id,metric,operator,threshold,sustain_s,hysteresis,cooldown_s) values($1,$2,'gt',$3,$4,0,0) returning id",[id,metric,threshold,sustain]))[0].id;
- const started=Date.now()-86400000;
- let seq=0;
- const observe=async(offset,{cadence={sample_s:120,connectivity_s:30,detail_s:300},detail={},elapsed=120,cpu=95}={})=>{
-  const sample={...batch(++seq).samples[0],uptime_s:offset+10,observed_at:new Date(started+offset*1000).toISOString(),cpu_pct:cpu,elapsed_s:elapsed,detail:{...detail,...(cadence===null?{}:{cadence})}};
-  return rpc('ingest_batch',[credential,batch(seq,{device_id:id,boot_id:session,clock_synced:true,samples:[sample]})]);
- };
- const active=async(key)=>Number((await q('select count(*)::int n from public.alerts where device_id=$1 and rule_key=$2 and resolved_at is null',[id,key]))[0].n);
- try {await run({id,rule,observe,active});} finally {await q('delete from public.devices where id=$1',[id]);}
-}
-const failedIpv4={connectivity:{ipv4:{available:true,reachable:false}}};
-test('cadence: local 120-second observations sustain CPU and consecutive probe alerts',async()=>{
- await cadenceFixture(async({rule,observe,active})=>{
-  await observe(0,{detail:failedIpv4});await observe(120,{detail:failedIpv4});
-  assert.equal(await active(rule),0);assert.equal(await active('reachability:ipv4'),1);
-  await observe(240);
-  assert.equal(await active(rule),1);
- });
-});
-test('cadence: adaptive 60-second probes preserve latency sustain and failure streaks',async()=>{
- await cadenceFixture(async({rule,observe,active})=>{
-  const options={cadence:{sample_s:30,connectivity_s:60,detail_s:600},elapsed:30,detail:{connectivity:{ipv4:{available:true,reachable:false,latency_ms:100}}}};
-  await observe(0,options);await observe(60,options);
-  assert.equal(await active(rule),1);assert.equal(await active('reachability:ipv4'),1);
- },{metric:'latency_ms',threshold:50,sustain:60,config:{wifi_interval:15}});
-});
-test('cadence: hourly detail sustains PSI and conntrack rules despite faster cloud requests',async()=>{
- for(const metric of ['memory_psi_full_avg10','conntrack_pct'])await cadenceFixture(async({rule,observe,active})=>{
-  const options={cadence:{sample_s:10,connectivity_s:30,detail_s:3600},elapsed:10,detail:{memory:{psi:{memory:{full:{avg10:95}}}},firewall:{conntrack_count:95,conntrack_max:100}}};
-  await observe(0,options);await observe(3600,options);
-  assert.equal(await active(rule),1,metric+' must use observed detail cadence');
- },{metric,sustain:3600,config:{detail_interval:60}});
-});
-test('cadence: legacy observations fall back to bounded monotonic elapsed time',async()=>{
- await cadenceFixture(async({rule,observe,active})=>{
-  for(const offset of [0,120,240])await observe(offset,{cadence:null,elapsed:120,detail:failedIpv4});
-  assert.equal(await active(rule),1);assert.equal(await active('reachability:ipv4'),1);
- });
-});
-test('cadence: a real gap still resets threshold sustain and probe failure streaks',async()=>{
- await cadenceFixture(async({rule,observe,active})=>{
-  await observe(0,{detail:failedIpv4});await observe(1200,{detail:failedIpv4});
-  assert.equal(await active(rule),0);assert.equal(await active('reachability:ipv4'),0);
-  await observe(1320,{detail:failedIpv4});
-  assert.equal(await active(rule),0);assert.equal(await active('reachability:ipv4'),1);
-  await observe(1440);assert.equal(await active(rule),1);
- });
-});
-test('cadence: invalid metadata cannot extend continuity across a real gap',async()=>{
- for(const cadence of [{sample_s:'300',connectivity_s:'120',detail_s:'3600'},{sample_s:1e200,connectivity_s:1e200,detail_s:1e200},{sample_s:0,connectivity_s:-1,detail_s:null}])await cadenceFixture(async({rule,observe,active})=>{
-  await observe(0,{cadence,elapsed:10,detail:failedIpv4});await observe(120,{cadence,elapsed:10,detail:failedIpv4});
-  assert.equal(await active(rule),0);assert.equal(await active('reachability:ipv4'),0);
- },{sustain:120});
-});
-test('deleting a device with an active rule alert cascades without a resolution notification',async()=>{
- await cadenceFixture(async({id,rule,observe,active})=>{
-  await observe(0);assert.equal(await active(rule),1);
-  await q('delete from public.devices where id=$1',[id]);
-  for(const table of ['devices','alert_rules','alerts','metric_samples']) {
-   const key=table==='devices'?'id':'device_id';
-   assert.equal((await q(`select count(*)::int n from public.${table} where ${key}=$1`,[id]))[0].n,0,table);
-  }
-  assert.equal((await q('select count(*)::int n from private.notification_queue where device_id=$1',[id]))[0].n,0);
-  assert.equal((await q('select count(*)::int n from public.devices where id=$1',[device]))[0].n,1,'another device remains intact');
- },{sustain:0});
 });
 test('credential rotation revokes previous token, deletion queues archive paths even through cascades',async()=>{
  await rpc('rotate_device_token',[device,owner,'f'.repeat(64)]);

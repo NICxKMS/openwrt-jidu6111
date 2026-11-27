@@ -15,67 +15,43 @@ import_logs() {
         rm -f "$chunk"
     done
 }
-write_pending() {
-    printf '{"schema_version":1,"device_id":"%s","boot_id":"%s","batch_id":"%s","clock_synced":%s,"sent_at":%s,"samples":[' "$device_id" "$boot_id" "$batch_id" "$clock_synced" "$observed_at" || return 1
-    cat "$STATE/samples.part" && printf '],"logs":[' && cat "$STATE/logs.part" &&
-        printf '],"dropped_samples":%s' "$pending_drops" || return 1
-    if [ -s "$STATE/inventory.json" ];then
-        printf ',"inventory":' && cat "$STATE/inventory.json" || return 1
-    fi
-    if [ "$include_snapshot" = 1 ];then
-        printf ',"diagnostics":' && cat "$STATE/snapshot" || return 1
-    fi
-    printf '}\n'
-}
 seal_batch() {
     [ ! -s "$STATE/pending" ] || return 0
-    if [ -s "$STATE/snapshot.pending" ];then
-        mv "$STATE/snapshot.pending" "$STATE/snapshot" || return 1
-    fi
-    : > "$STATE/selected" && : > "$STATE/samples.part" && : > "$STATE/logs.part" || return 1
+    : > "$STATE/selected";: > "$STATE/samples.part";: > "$STATE/logs.part"
     sample_count=0;log_count=0;body_size=0
     # Critical log groups win admission; samples remain ordered oldest first.
     for priority in c s l;do
         for file in "$STATE/queue"/*."$priority";do
             [ -f "$file" ] || continue
             if [ "$priority" = s ];then [ "$sample_count" -lt 12 ] || break;else [ "$log_count" -lt 100 ] || break;fi
-            size=$(wc -c < "$file") || return 1
-            [ $((body_size+size)) -le 80000 ] || break
+            size=$(wc -c < "$file");[ $((body_size+size)) -le 80000 ] || break
             body_size=$((body_size+size))
             if [ "$priority" = s ];then
-                if [ "$sample_count" -gt 0 ];then printf ',' >> "$STATE/samples.part" || return 1;fi
-                cat "$file" >> "$STATE/samples.part" || return 1
-                sample_count=$((sample_count+1))
+                [ "$sample_count" -eq 0 ] || printf ',' >> "$STATE/samples.part"
+                cat "$file" >> "$STATE/samples.part";sample_count=$((sample_count+1))
             else
-                if [ "$log_count" -gt 0 ];then printf ',' >> "$STATE/logs.part" || return 1;fi
-                cat "$file" >> "$STATE/logs.part" || return 1
-                log_count=$((log_count+1))
+                [ "$log_count" -eq 0 ] || printf ',' >> "$STATE/logs.part"
+                cat "$file" >> "$STATE/logs.part";log_count=$((log_count+1))
             fi
-            printf '%s\n' "$file" >> "$STATE/selected" || return 1
+            printf '%s\n' "$file" >> "$STATE/selected"
         done
     done
     [ $((sample_count+log_count)) -gt 0 ] || return 1
-    clock_now;read -r batch_id < /proc/sys/kernel/random/uuid || return 1
-    read -r pending_drops < "$STATE/dropped" || return 1
-    include_snapshot=0
-    if [ "$diagnostics_enabled" = 1 ] && [ "${remote_diagnostics_enabled:-0}" = 1 ] && [ -s "$STATE/snapshot" ];then
-        include_snapshot=1
-    fi
-    if ! write_pending > "$STATE/pending.new" ||
-        ! printf '%s\n' "$pending_drops" > "$STATE/pending.drops";then
-        rm -f "$STATE/pending.new" "$STATE/pending.drops"
-        return 1
-    fi
-    if [ "$include_snapshot" = 1 ] && ! mv "$STATE/snapshot" "$STATE/snapshot.pending";then
-        rm -f "$STATE/pending.new" "$STATE/pending.drops"
-        return 1
-    fi
+    clock_now;read -r batch_id < /proc/sys/kernel/random/uuid
+    read -r pending_drops < "$STATE/dropped"
+    {
+        printf '{"schema_version":1,"device_id":"%s","boot_id":"%s","batch_id":"%s","clock_synced":%s,"sent_at":%s,"samples":[' "$device_id" "$boot_id" "$batch_id" "$clock_synced" "$observed_at"
+        cat "$STATE/samples.part";printf '],"logs":[';cat "$STATE/logs.part";printf '],"dropped_samples":%s' "$pending_drops"
+        if [ -s "$STATE/inventory.json" ];then printf ',"inventory":';cat "$STATE/inventory.json";fi
+        if [ "$diagnostics_enabled" = 1 ] && [ "${remote_diagnostics_enabled:-0}" = 1 ] && [ -s "$STATE/snapshot" ];then
+            printf ',"diagnostics":';cat "$STATE/snapshot"
+            mv "$STATE/snapshot" "$STATE/snapshot.pending"
+        fi
+        printf '}\n'
+    } > "$STATE/pending.new"
     # Atomic immutable body: retries use the identical batch UUID, sent_at and content.
-    if [ -d "$STATE/pending" ] || ! mv "$STATE/pending.new" "$STATE/pending";then
-        rm -f "$STATE/pending.new" "$STATE/pending.drops"
-        if [ "$include_snapshot" = 1 ];then mv "$STATE/snapshot.pending" "$STATE/snapshot";fi
-        return 1
-    fi
+    mv "$STATE/pending.new" "$STATE/pending"
+    printf '%s\n' "$pending_drops" > "$STATE/pending.drops"
     while IFS= read -r file;do rm -f "$file";done < "$STATE/selected"
     rm -f "$STATE/selected" "$STATE/samples.part" "$STATE/logs.part"
 }
@@ -216,7 +192,6 @@ critical_upload_due() {
 }
 write_status() {
     json_init;json_add_boolean running 1;json_add_string version 1.0.0
-    json_add_string boot_id "$boot_id"
     json_add_int failed_uploads "${failed_uploads:-0}";json_add_int successful_uploads "${successful_uploads:-0}"
     set -- $(awk -v state="$STATE/parent-usage.previous" -f "$LIB/parent-usage.awk" "/proc/$$/stat" /proc/stat "/proc/$$/status" 2>/dev/null)
     case "$1" in ''|null)json_add_null parent_cpu_pct;;*)json_add_double parent_cpu_pct "$1";;esac
@@ -252,16 +227,12 @@ terminate_roots() {
     owned_roots=''
     for child in $child_roots;do if child_alive "$child";then owned_roots="$owned_roots $child";kill -STOP "$child" 2>/dev/null;fi;done
     child_roots=$owned_roots
-    tree=$(
-        for stat_file in /proc/[0-9]*/stat;do
-            { IFS= read -r stat_line < "$stat_file" && printf '%s\n' "$stat_line"; } 2>/dev/null
-        done | awk -v roots="$child_roots" '
-            {pid=$1;sub(/^.*\) /,"");parent[pid]=$2}
-            END{n=split(roots,r," ");for(i=1;i<=n;i++)if(r[i]~/^[0-9]+$/)inside[r[i]]=1;
-            for(pass=0;pass<16;pass++)for(k in parent)if(parent[k] in inside)inside[k]=1;
-            for(k in inside)printf "%s ",k}'
-    )
-    [ -z "$child_roots$tree" ] || kill -KILL $child_roots $tree 2>/dev/null
+    tree=$(awk -v roots="$child_roots" '
+        {pid=$1;sub(/^.*\) /,"");parent[pid]=$2}
+        END{n=split(roots,r," ");for(i=1;i<=n;i++)if(r[i]~/^[0-9]+$/)inside[r[i]]=1;
+        for(pass=0;pass<16;pass++)for(k in parent)if(parent[k] in inside)inside[k]=1;
+        for(k in inside)printf "%s ",k}' /proc/[0-9]*/stat 2>/dev/null)
+    [ -z "$tree" ] || kill -KILL $tree 2>/dev/null
     for child in $child_roots;do wait "$child" 2>/dev/null;done
 }
 cleanup() {
@@ -288,16 +259,15 @@ start_logs() {
     (while sleep 5;do printf '__NICX_TICK__\n';done) > "$STATE/logpipe" & tick_pid=$!
 }
 main() {
-    init_state_dirs || exit 1
-    # The kernel owns the lock even before the PID is published, and releases
-    # it after the agent and any remaining children close their descriptors.
-    exec 9>> "$STATE/agent.lock"
-    flock -n 9 || exit 1
-    agent_owner_alive "$STATE" && exit 1
     init_state || exit 1
-    mkdir -p "$STATE/lock" || exit 1
-    trap cleanup EXIT;trap 'exit 0' INT TERM
-    echo $$ > "$STATE/lock/pid" || exit 1
+    # A second instance never removes or steals the current process's lock.
+    if ! mkdir "$STATE/lock" 2>/dev/null;then
+        read -r owner < "$STATE/lock/pid" 2>/dev/null
+        number "$owner" && kill -0 "$owner" 2>/dev/null && exit 1
+        rm -f "$STATE/lock/pid";rmdir "$STATE/lock" 2>/dev/null
+        mkdir "$STATE/lock" 2>/dev/null || exit 1
+    fi
+    echo $$ > "$STATE/lock/pid";trap cleanup EXIT;trap 'exit 0' INT TERM
     load_config
     [ "$enabled" = 1 ] && valid_endpoint "$endpoint" && valid_uuid "$device_id" || exit 1
     prior_device='';[ ! -r "$STATE/device_id" ] || read -r prior_device < "$STATE/device_id"

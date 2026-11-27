@@ -1,0 +1,2 @@
+# Preserve the exact legacy OpenWrt patch bytes used for Stable.
+sources/openwrt.patch whitespace=-blank-at-eol,-blank-at-eof

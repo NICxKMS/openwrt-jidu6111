@@ -1,5 +1,6 @@
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -54,9 +55,22 @@ class FirmwareArtifactTests(unittest.TestCase):
             self.assertEqual(marker.read_text(), 'keep this')
 
     def test_failed_source_preparation_cleans_its_workspace(self):
-        commit = subprocess.check_output(['git', '-C', str(SCRIPTS.parent), 'rev-parse', 'HEAD'], text=True).strip()
         with tempfile.TemporaryDirectory() as temporary:
             parent = Path(temporary)
+            project = parent / 'project'
+            scripts = project / 'scripts'
+            sources = project / 'sources'
+            scripts.mkdir(parents=True)
+            sources.mkdir()
+            for name in ('build-firmware.sh', 'release_storage.py', 'release_workflow.py'):
+                shutil.copyfile(SCRIPTS / name, scripts / name)
+            (sources / 'feeds.conf').write_text('src-git nicx_monitor https://example.test/monitor^pin\n',
+                                                encoding='utf-8')
+            subprocess.run(['git', 'init', '-q', project], check=True)
+            subprocess.run(['git', '-C', project, 'add', '.'], check=True)
+            subprocess.run(['git', '-C', project, '-c', 'user.name=Firmware Test',
+                            '-c', 'user.email=firmware-test@example.test', 'commit', '-qm', 'Fixture'], check=True)
+            commit = subprocess.check_output(['git', '-C', project, 'rev-parse', 'HEAD'], text=True).strip()
             tools = parent / 'bin'
             tools.mkdir()
             make = tools / 'make'
@@ -77,7 +91,7 @@ class FirmwareArtifactTests(unittest.TestCase):
             builds = parent / 'builds'
             env = {**os.environ, 'PATH': f'{tools}:./relative-bin:/path with spaces:{os.environ["PATH"]}',
                    'JIDU6111_BUILD_ROOT': str(builds), 'CANDIDATE_COMMIT': commit}
-            result = subprocess.run(['bash', str(SCRIPTS / 'build-firmware.sh'), '--commit', commit,
+            result = subprocess.run(['bash', str(scripts / 'build-firmware.sh'), '--commit', commit,
                                      '--profile', 'gcc-kernel', '--output', str(output),
                                      '--signing-key', str(signing_key)], env=env, text=True, capture_output=True)
             self.assertEqual(result.returncode, 73, result.stderr)
