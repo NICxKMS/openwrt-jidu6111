@@ -1,11 +1,12 @@
 import hashlib
+from io import BytesIO
 import json
 import pathlib
 import sys
 import tarfile
 import tempfile
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 import release_workflow as release
@@ -119,3 +120,12 @@ class ManifestTests(unittest.TestCase):
 class GitHubTests(unittest.TestCase):
     def test_reads_concatenated_paginated_json_from_older_gh(self):
         self.assertEqual(release.json_pages('  [{"id":1}] [{"id":2}]\n'), [[{"id": 1}], [{"id": 2}]])
+
+    def test_allows_time_for_a_published_asset_to_become_available(self):
+        contents = b"firmware"
+        assets = {"firmware.bin": {"size": len(contents), "sha256": hashlib.sha256(contents).hexdigest()}}
+        responses = [OSError("download unavailable"), OSError("download unavailable"), BytesIO(contents)]
+        with patch.object(release.urllib.request, "urlopen", side_effect=responses), \
+                patch.object(release.time, "sleep") as sleep:
+            release.GitHub(release.REPO).verify_public({"tag_name": "v1.0.0"}, assets)
+        self.assertEqual([call.args for call in sleep.call_args_list], [(1,), (2,)])

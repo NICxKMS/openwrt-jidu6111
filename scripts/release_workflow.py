@@ -211,6 +211,7 @@ class GitHub:
                     except OSError:
                         if retry == 2:
                             raise
+                        time.sleep(2 ** retry)
                 if path.stat().st_size != expected["size"] or digest(path) != expected["sha256"]:
                     raise ValueError(f"Public asset checksum mismatch: {name}")
 
