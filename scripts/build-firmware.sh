@@ -71,6 +71,8 @@ scratch=${JIDU6111_BUILD_ROOT:-${XDG_STATE_HOME:-$HOME/.local/state}/jidu6111/bu
 mkdir -p -m 700 -- "$scratch"
 scratch=$(realpath -e -- "$scratch")
 [[ -O $scratch ]] || fail 'Use a build workspace owned by your account.'
+scratch_mode=$(stat -c %a -- "$scratch")
+(( (8#$scratch_mode & 8#077) == 0 )) || fail 'The build workspace root must be private (chmod 700).'
 [[ $scratch != *[[:space:]]* ]] || fail 'OpenWrt requires a build workspace path without whitespace.'
 [[ $scratch != *\'* && $scratch != *\^* && $scratch != *\;* ]] || fail 'Choose a build workspace path without quotes, carets or semicolons.'
 [[ $(stat -c %d -- "$scratch") == "$(stat -c %d -- "$output_parent")" ]] \

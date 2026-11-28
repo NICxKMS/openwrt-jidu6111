@@ -8,6 +8,6 @@ List relevant passing checks. Distinguish local fixtures from hosted or physical
 
 ## Firmware compatibility
 
-Describe changes to image compatibility, signed packages, recovery and test coverage. For a task branch, record its purpose, prerequisites and when it can be retired.
+Describe changes to image compatibility, signed packages, recovery and test coverage. Include release configuration changes and remaining limitations. For a task branch, record its purpose, prerequisites and when it can be retired.
 
 Confirm that the PR includes public-safe evidence and keeps secrets and private telemetry outside Git.

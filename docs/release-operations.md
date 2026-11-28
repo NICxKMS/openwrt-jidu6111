@@ -30,7 +30,7 @@ Write release notes identifying the variant matrix, known issues, installation p
 
 ## Promote exact bytes to Stable
 
-1. Select the immutable, verified Beta for the target version. Download its assets to a new local directory and keep the Beta tag and source commit.
+1. Select the immutable, verified Beta for the target version. A retained Beta may be selected when it has the exact qualifying hardware evidence. Download its assets to a new local directory and keep the Beta tag and source commit.
 2. Complete [hardware verification](hardware-testing.md) on each exact image. Use the full 72-hour window per variant for the current policy. Preserve the previous image and matching feed for recovery. Keep private configuration and telemetry out of the report.
 3. Prepare and stage Stable from the separate local directory. The promotion step adds a release descriptor and evidence file. CI compares the rest of the manifest to the immutable Beta, including every image, feed and build record checksum.
 4. Review the staged hardware report and exact manifest checksum before approving the protected job. The job repeats artifact and promotion checks before publication. The new Stable tag resolves to the tested source. Publishing a lower maintenance version keeps Latest on the newer Stable.
@@ -46,9 +46,9 @@ A published Stable release requires functional and stability evidence for all fo
 
 ## Build storage and scope
 
-Use native Linux storage in WSL2. The release builder keeps one compiled profile at a time and shares downloads only within that build. Interactive builds retain their toolchain. The baseline disables ccache to save disk. Enable it under OpenWrt's build-system settings in `make menuconfig`, then use `make build` to keep that local configuration. Use a separate worktree per compiler or radio build with existing intermediates. For a local configuration check, run `make configure-gcc-kernel BUILD_RADIO=wcss-off` or use `dual-band`. Omit `BUILD_RADIO` for both. `JIDU6111_OPENWRT_REFERENCE` can point to a complete local OpenWrt Git checkout containing the first pinned parent, avoiding a second network fetch of its history.
+Use native Linux storage in WSL2. The release builder keeps one compiled profile at a time and shares downloads only within that build. Interactive builds retain their toolchain. The baseline disables ccache to save disk. Enable it under OpenWrt's build-system settings in `make menuconfig`, then use `make build` to keep that local configuration. Use a separate worktree per compiler or radio build with existing intermediates. In a new checkout run `make source feeds` first, then `make configure-gcc-kernel BUILD_RADIO=wcss-off` or use `dual-band`. Omit `BUILD_RADIO` for both. `JIDU6111_OPENWRT_REFERENCE` can point to a complete local OpenWrt Git checkout containing the first pinned parent, avoiding a second network fetch of its history.
 
-`make storage-report` shows release scratch use and free space. `REMOTE=1` adds GitHub assets and cache usage. `make cleanup` previews deletion of abandoned, builder-owned scratch directories. Use `APPLY=1` after inspection. Active builds hold locks. Keep private keys and recovery copies outside generated and scratch directories.
+`make storage-report` shows release scratch use and free space. `REMOTE=1` adds GitHub assets and cache usage. `make cleanup` previews deletion of abandoned, builder-owned scratch directories. Use `APPLY=1` after inspection. Active builds hold locks. If overriding `JIDU6111_BUILD_ROOT`, use an account-owned directory with mode `0700`. Keep private keys and recovery copies outside generated and scratch directories.
 
 | Change | Normal local validation |
 | --- | --- |

@@ -11,6 +11,17 @@ from release_storage import build_root, cleanup
 
 
 class ScratchCleanupTests(unittest.TestCase):
+    def test_refuses_to_clean_a_shared_root(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            root.chmod(0o770)
+            marked = root / "build.abcd1234"
+            marked.mkdir()
+            (marked / ".jidu6111-owned").touch()
+            with self.assertRaisesRegex(ValueError, "must be private"):
+                cleanup(root, apply=True)
+            self.assertTrue(marked.is_dir())
+
     def test_configured_build_root_resolves_symlinks_like_builder(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

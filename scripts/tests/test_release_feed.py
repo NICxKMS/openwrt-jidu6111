@@ -111,6 +111,10 @@ class SelectionTests(unittest.TestCase):
         read.return_value = manifest(feed="missing.tar.gz")
         with self.assertRaisesRegex(RuntimeError, "asset"):
             select_feed(self.router, "stable")
+        read.return_value = manifest()
+        read.return_value["assets"]["feed.tar.gz"]["sha256"] = "not-a-checksum"
+        with self.assertRaisesRegex(RuntimeError, "inconsistent package feed asset metadata"):
+            select_feed(self.router, "stable")
 
 
 class ArchiveTests(unittest.TestCase):

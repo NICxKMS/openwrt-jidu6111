@@ -33,6 +33,7 @@ git -C "$checkout" init --quiet
 git -C "$checkout" remote add origin https://github.com/openwrt/openwrt.git
 reference=${JIDU6111_OPENWRT_REFERENCE:-}
 if [[ -n "$reference" ]]; then
+    reference=$(realpath -e -- "$reference")
     [[ $(git -C "$reference" rev-parse --is-shallow-repository) == false ]] || {
         echo 'Use a complete OpenWrt Git checkout as the source reference.' >&2
         exit 1

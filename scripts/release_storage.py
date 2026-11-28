@@ -23,26 +23,38 @@ def build_root():
 def cleanup(root, *, apply):
     if not root.is_dir() or root.is_symlink():
         return []
-    if root.stat().st_uid != os.getuid():
-        raise ValueError("Build workspace root is owned by a different user")
+    root_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        root_info = os.fstat(root_fd)
+        if root_info.st_uid != os.getuid() or root_info.st_mode & 0o077:
+            raise ValueError("Build workspace root must be private and owned by your account (chmod 700)")
+        return clean_private_root(root, root_fd, apply=apply)
+    finally:
+        os.close(root_fd)
+
+
+def clean_private_root(root, root_fd, *, apply):
     candidates = []
-    for path in sorted(root.iterdir()):
-        if not re.fullmatch(r"build\.[A-Za-z0-9_]{8}", path.name):
+    for name in sorted(os.listdir(root_fd)):
+        if not re.fullmatch(r"build\.[A-Za-z0-9_]{8}", name):
             continue
         try:
-            fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            fd = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=root_fd)
         except (FileNotFoundError, NotADirectoryError):
             continue
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            if not os.path.samestat(os.fstat(fd), path.lstat()) or os.fstat(fd).st_uid != os.getuid():
+            info = os.fstat(fd)
+            if info.st_uid != os.getuid() or not os.path.samestat(
+                info, os.stat(name, dir_fd=root_fd, follow_symlinks=False)
+            ):
                 continue
             marker = os.stat(".jidu6111-owned", dir_fd=fd, follow_symlinks=False)
             if not stat.S_ISREG(marker.st_mode) or marker.st_uid != os.getuid():
                 continue
             if apply:
-                shutil.rmtree(path)
-            candidates.append(path)
+                shutil.rmtree(Path(f"/proc/self/fd/{root_fd}") / name)
+            candidates.append(root / name)
         except (BlockingIOError, FileNotFoundError):
             continue
         finally:

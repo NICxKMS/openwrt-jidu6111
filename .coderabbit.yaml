@@ -67,7 +67,7 @@ reviews:
   merge_risk_instructions: |
     Evaluate consequences, not patch size. Treat potential boot failure, flash
     corruption, ABI incompatibility, OOM, connectivity loss, authorization bypass,
-    credential exposure, data loss, unsafe upgrades, storage exhaustion and
+    credential exposure, data loss, unsafe upgrades, storage or quota exhaustion and
     incompatible component upgrades as serious risks. Consider rollback and
     missing verification. Distinguish demonstrated defects from uncertainty.
 
