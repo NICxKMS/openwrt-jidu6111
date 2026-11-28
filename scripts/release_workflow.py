@@ -283,7 +283,10 @@ def publish(github, channel: str, tag: str, commit: str, receipt: str) -> None:
     if github.tag_commit(tag, missing_ok=True) != commit:
         raise ValueError("Release tag differs from the verified source")
     if target["draft"]:
-        target = github.patch(target, draft=False, make_latest="false")
+        body = target.get("body") or ""
+        if PENDING not in body.splitlines():
+            body = f"{PENDING}\n{body}"
+        target = github.patch(target, draft=False, make_latest="false", body=body)
     if asset_receipt(target) != receipt:
         raise ValueError("Published assets differ from the independently verified draft")
     if target.get("immutable") is not True or github.tag_commit(tag) != commit:

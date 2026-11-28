@@ -30,7 +30,9 @@ class PublicationTests(unittest.TestCase):
         self.receipt = release.asset_receipt(self.draft)
         self.github.releases.return_value = [self.draft, self.old]
         self.github.tag_commit.return_value = COMMIT
-        self.github.patch.return_value = {**self.draft, "draft": False, "immutable": True}
+        self.github.patch.side_effect = lambda entry, **changes: {
+            **entry, **changes, "immutable": True,
+        }
 
     def test_asset_replaced_after_verification_blocks_publication(self):
         self.draft["assets"][0]["id"] = 51
@@ -42,14 +44,22 @@ class PublicationTests(unittest.TestCase):
         self.github.verify_public.side_effect = ValueError("download failed")
         with self.assertRaisesRegex(ValueError, "download failed"):
             release.publish(self.github, "beta", self.tag, COMMIT, self.receipt)
-        self.github.patch.assert_called_once_with(self.draft, draft=False, make_latest="false")
+        self.github.patch.assert_called_once_with(self.draft, draft=False, make_latest="false", body=self.draft["body"])
         self.github.delete.assert_not_called()
 
     def test_success_makes_new_beta_eligible_and_preserves_previous(self):
         release.publish(self.github, "beta", self.tag, COMMIT, self.receipt)
-        self.github.patch.assert_called_with(self.github.patch.return_value, body=release.MANAGED, make_latest="false")
+        self.assertEqual(self.github.patch.call_args.kwargs, {"body": release.MANAGED, "make_latest": "false"})
         self.github.delete.assert_not_called()
 
+    def test_editing_draft_notes_cannot_skip_public_download_verification(self):
+        self.draft["body"] = f"{release.MANAGED}\n\nUpdated notes"
+        self.github.verify_public.side_effect = ValueError("download failed")
+        with self.assertRaisesRegex(ValueError, "download failed"):
+            release.publish(self.github, "beta", self.tag, COMMIT, self.receipt)
+        self.github.verify_public.assert_called_once()
+        self.github.patch.assert_called_once_with(self.draft, draft=False, make_latest="false",
+                                                 body=f"{release.PENDING}\n{self.draft['body']}")
 
 class ManifestTests(unittest.TestCase):
     def setUp(self):
