@@ -14,6 +14,8 @@ Retire temporary source refs only after checking all worktrees, open PRs, reacha
 
 ## Build and publish Beta
 
+Release builds require Python 3.10 or newer. Install and authenticate the GitHub CLI (`gh`) with repository access before staging a draft.
+
 ```sh
 make host-deps
 make build-firmware COMMIT="$(git rev-parse HEAD)" OUTPUT=/path/to/new-beta-assets \
@@ -24,7 +26,7 @@ make release-beta COMMIT="$(git rev-parse HEAD)" TAG=v1.1.0-beta.1 \
 
 The full build produces two radio images per compiler, one signed feed per compiler after verifying both images have the same kernel and trust, and one build information file per compiler. Use a fresh version tag for changed bytes. Staging reserves the source tag after upload. The tag can be visible before the draft and its assets are published. The operator stages all assets on a draft, then dispatches the workflow from `main`. Review the draft and exact manifest checksum when approving the environment job. GitHub requires push access to read draft releases, so the protected job independently verifies the complete file digests, exact source and pins, image metadata, key trust and APK signatures after approval and before publication. It rechecks the draft asset IDs and digests and checks public downloads before marking the release eligible. If the public download check fails, rerun the workflow for the same asset set and tag. The pending release stays outside normal channel selection.
 
-Write release notes identifying the variant matrix, known issues, installation prerequisites and actual verification. Beta metadata reports built and artifact/feed verified. Any hardware evidence for Beta belongs in its notes with the exact image checksum and test date. The files contain the full source pins, image and feed hashes, resolved configurations, toolchain versions and embedded signing key fingerprint. These inputs aid investigation and rebuilding. Preserve the original release bytes because build environment, signing and timestamps can affect binary reproducibility.
+Write release notes identifying the variant matrix, known issues, installation prerequisites and actual verification. The build information records build and local verification. GitHub Actions independently verifies the artifacts and feed before publication. Any hardware evidence for Beta belongs in its notes with the exact image checksum and test date. The files contain the full source pins, image and feed hashes, resolved configurations, toolchain versions and embedded signing key fingerprint. These inputs aid investigation and rebuilding. Preserve the original release bytes because build environment, signing and timestamps can affect binary reproducibility.
 
 ## Promote exact bytes to Stable
 
@@ -44,7 +46,7 @@ A published Stable release requires functional and stability evidence for all fo
 
 ## Build storage and scope
 
-Use native Linux storage in WSL2. The release builder keeps one compiled profile at a time and shares downloads only within that build. Interactive builds retain their toolchain and optional compiler cache. Use a separate worktree per compiler or radio build with existing intermediates. For a local configuration check, run `make configure-gcc-kernel BUILD_RADIO=wcss-off` or use `dual-band`. Omit `BUILD_RADIO` for both. `JIDU6111_OPENWRT_REFERENCE` can point to a complete local OpenWrt Git checkout containing the first pinned parent, avoiding a second network fetch of its history.
+Use native Linux storage in WSL2. The release builder keeps one compiled profile at a time and shares downloads only within that build. Interactive builds retain their toolchain. The baseline disables ccache to save disk. Enable it under OpenWrt's build-system settings in `make menuconfig`, then use `make build` to keep that local configuration. Use a separate worktree per compiler or radio build with existing intermediates. For a local configuration check, run `make configure-gcc-kernel BUILD_RADIO=wcss-off` or use `dual-band`. Omit `BUILD_RADIO` for both. `JIDU6111_OPENWRT_REFERENCE` can point to a complete local OpenWrt Git checkout containing the first pinned parent, avoiding a second network fetch of its history.
 
 `make storage-report` shows release scratch use and free space. `REMOTE=1` adds GitHub assets and cache usage. `make cleanup` previews deletion of abandoned, builder-owned scratch directories. Use `APPLY=1` after inspection. Active builds hold locks. Keep private keys and recovery copies outside generated and scratch directories.
 

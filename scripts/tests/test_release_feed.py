@@ -12,7 +12,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from release_workflow import PENDING
-from release_feed import RouterIdentity, SelectedFeed, channel_release, download_feed, extract_feed, select_feed
+from release_feed import RouterIdentity, SelectedFeed, download_feed, extract_feed, releases_by_version, select_feed
 
 
 BOARD = "jiorouter,ax6000-jidu6111"
@@ -63,12 +63,12 @@ class SelectionTests(unittest.TestCase):
         newest["body"] += "\n" + PENDING
         unmanaged = release("v1.0.1-beta.6", prerelease=True, managed=False)
         read.return_value = [newest, unmanaged, release("v1.0.1-beta.3", prerelease=True), release(BETA, prerelease=True)]
-        self.assertEqual(channel_release("beta")["tag_name"], BETA)
+        self.assertEqual([entry["tag_name"] for entry in releases_by_version()], [BETA, "v1.0.1-beta.3"])
 
     @patch("release_feed.release_manifest")
-    @patch("release_feed.channel_release")
+    @patch("release_feed.releases_by_version")
     def test_auto_prefers_stable_and_does_not_fetch_beta_manifest(self, channel, read):
-        channel.side_effect = [release(STABLE), release(BETA, prerelease=True)]
+        channel.return_value = [release(BETA, prerelease=True), release(STABLE)]
         read.return_value = manifest()
         result = select_feed(self.router)
         self.assertEqual((result.channel, result.tag, result.profile), ("stable", STABLE, "gcc-kernel"))
@@ -76,17 +76,25 @@ class SelectionTests(unittest.TestCase):
         self.assertEqual(read.call_count, 1)
 
     @patch("release_feed.release_manifest")
-    @patch("release_feed.channel_release")
+    @patch("release_feed.releases_by_version")
     def test_auto_uses_beta_only_when_stable_does_not_match(self, channel, read):
-        channel.side_effect = [release(STABLE), release(BETA, prerelease=True)]
+        channel.return_value = [release(BETA, prerelease=True), release(STABLE)]
         read.side_effect = [manifest(kernel="6.18.60~different-r1"), manifest()]
         result = select_feed(self.router)
         self.assertEqual(result.channel, "beta")
 
     @patch("release_feed.release_manifest")
-    @patch("release_feed.channel_release")
+    @patch("release_feed.releases_by_version")
+    def test_auto_uses_older_matching_stable_before_beta(self, channel, read):
+        channel.return_value = [release("v2.0.0"), release(BETA, prerelease=True), release(STABLE)]
+        read.side_effect = [manifest(kernel="6.18.60~different-r1"), manifest()]
+        self.assertEqual(select_feed(self.router).tag, STABLE)
+        self.assertEqual([call.args[0]["tag_name"] for call in read.call_args_list], ["v2.0.0", STABLE])
+
+    @patch("release_feed.release_manifest")
+    @patch("release_feed.releases_by_version")
     def test_requires_every_router_compatibility_field(self, channel, read):
-        channel.return_value = release(STABLE)
+        channel.return_value = [release(STABLE)]
         for changed in (
             {"board": "other"}, {"architecture": "aarch64_generic"},
             {"key_sha256": "e" * 64}, {"kernel": "6.18.60~wrong-r1"},
@@ -97,9 +105,9 @@ class SelectionTests(unittest.TestCase):
                     select_feed(self.router, "stable")
 
     @patch("release_feed.release_manifest")
-    @patch("release_feed.channel_release")
+    @patch("release_feed.releases_by_version")
     def test_unverified_or_missing_asset_cannot_be_selected(self, channel, read):
-        channel.return_value = release(STABLE)
+        channel.return_value = [release(STABLE)]
         read.return_value = manifest(feed="missing.tar.gz")
         with self.assertRaisesRegex(RuntimeError, "asset"):
             select_feed(self.router, "stable")
@@ -165,7 +173,7 @@ class ArchiveTests(unittest.TestCase):
         selection = SelectedFeed("stable", STABLE, "gcc-kernel", "feed.tar.gz", 5, hashlib.sha256(b"right").hexdigest())
         with self.assertRaisesRegex(RuntimeError, "checksum"):
             download_feed(selection, self.root)
-        self.assertFalse((self.root / "feed").exists())
+        self.assertEqual(list(self.root.iterdir()), [])
 
 
 if __name__ == "__main__":

@@ -2,7 +2,7 @@
 
 ## Build and install
 
-Use the signed APK feed linked to the image in the release manifest. For a kernel module or a userspace package with a kernel dependency, verify the complete installed kernel APK version, including its ABI hash. The board, target, architecture, profile and signing key also identify the matching feed. For an architecture-independent or compatible userspace package without a kernel dependency, APK checks the actual runtime dependencies and signatures. The firmware version alone cannot establish compatibility.
+Use the signed APK feed linked to the image in the release manifest. For a kernel module or a userspace package with a kernel dependency, verify the complete installed kernel APK version, including its ABI hash. The board, target, architecture, profile and signing key also identify the matching feed. For an architecture-independent or compatible userspace package without a kernel dependency, APK checks declared dependencies and signatures. Runtime functionality still needs testing.
 
 On a prepared OpenWrt tree, select the package as a module with `make menuconfig`. Run `make package PACKAGE=name` and `make package-index`. Reuse the same profile's configured tree and toolchain. For a cold environment use a compatible OpenWrt SDK when the recipe or compiled dependencies need the toolchain. Use source, configuration, toolchain and feed pins from build information. Build a local SDK with OpenWrt's `CONFIG_SDK` option when needed. Verify SDK source and checksum before use. [OpenWrt build system and SDK](https://openwrt.org/docs/guide-developer/toolchain/start)
 

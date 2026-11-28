@@ -44,7 +44,7 @@ jobs:
               echo 'patches=true' >> "$GITHUB_OUTPUT"
             fi
           fi
-          python3 -B scripts/check_sources.py
+          python3 -B scripts/check_sources.py --report
           python3 -B -m unittest discover -s scripts/tests -v
           for script in scripts/*.sh; do bash -n "$script"; done
           if git cat-file -e "$BASE^{commit}" 2>/dev/null; then git diff --check "$BASE" HEAD; fi
@@ -67,7 +67,10 @@ jobs:
           grep -Fqx 'Package: luci-app-nicx-telemetry' openwrt/feeds/nicx_monitor.index
       - if: inputs.patch_apply || needs.scope.outputs.patches == 'true'
         name: Apply kernel and networking package patches
-        run: make -C openwrt target/linux/prepare package/kernel/mac80211/prepare package/network/services/hostapd/prepare
+        run: >-
+          make -C openwrt target/linux/prepare package/kernel/mac80211/prepare
+          package/network/services/hostapd/prepare package/network/utils/iw/prepare
+          package/network/utils/iwinfo/prepare
 
   required:
     name: Required repository checks

@@ -1,11 +1,14 @@
+from hashlib import sha256
 from pathlib import Path
 import json
 import sys
 import tempfile
 import unittest
+from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from promotion import EVIDENCE, verify_promotion
+from promotion import EVIDENCE, beta_manifest, main, verify_promotion
+from release_workflow import MANAGED, MANIFEST
 
 
 class HardwareEvidenceTests(unittest.TestCase):
@@ -53,3 +56,37 @@ class HardwareEvidenceTests(unittest.TestCase):
         self.write_report()
         with self.assertRaisesRegex(ValueError, "Incomplete hardware evidence"):
             verify_promotion(self.directory, self.stable, self.beta)
+
+    def test_prepared_directory_requires_the_same_requested_beta_and_evidence(self):
+        self.write_report()
+        evidence = self.directory / EVIDENCE
+        contents = evidence.read_bytes()
+        self.stable["assets"][EVIDENCE] = {"size": len(contents), "sha256": sha256(contents).hexdigest()}
+        args = ["promotion.py", "prepare", "--directory", str(self.directory), "--evidence", str(evidence),
+                "--commit", self.stable["source_commit"], "--tag", "v1.2.0", "--beta"]
+        with patch("promotion.verify_local", return_value=self.stable):
+            with patch.object(sys, "argv", [*args, "v1.2.0-beta.1"]):
+                self.assertEqual(main(), 0)
+            with patch.object(sys, "argv", [*args, "v1.2.0-beta.2"]), patch("promotion.sys.stderr") as errors:
+                self.assertEqual(main(), 1)
+                self.assertIn("differs from the requested Beta", errors.write.call_args_list[0].args[0])
+
+    def test_beta_manifest_rejects_published_payload_with_a_different_digest(self):
+        self.beta["assets"]["image.bin"]["size"] = 10
+        blob = json.dumps(self.beta).encode()
+        tag = "v1.2.0-beta.1"
+        commit = self.beta["source_commit"]
+        release = {"id": 1, "target_commitish": commit, "tag_name": tag, "immutable": True,
+                   "draft": False, "prerelease": True, "body": MANAGED,
+                   "assets": [
+                       {"name": MANIFEST, "id": 2, "state": "uploaded", "size": len(blob),
+                        "digest": "sha256:" + sha256(blob).hexdigest()},
+                       {"name": "image.bin", "id": 3, "state": "uploaded", "size": 10,
+                        "digest": "sha256:" + "2" * 64},
+                   ]}
+        github = Mock()
+        github.releases.return_value = [release]
+        github.tag_commit.return_value = commit
+        github.download.side_effect = lambda entry, directory, name: (directory / name).write_bytes(blob)
+        with self.assertRaisesRegex(ValueError, "Published Beta assets differ"):
+            beta_manifest(github, self.directory, tag, commit)

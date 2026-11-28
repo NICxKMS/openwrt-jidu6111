@@ -10,7 +10,7 @@ import sys
 from tempfile import TemporaryDirectory
 
 from firmware_artifacts import BUILD_PROFILES, RADIOS, TARGET, output_json
-from release_workflow import REPO, GitHub, HEX40, HEX64, MANIFEST, TAGS, digest, eligible, get_managed, verify_local
+from release_workflow import REPO, GitHub, HEX40, HEX64, MANIFEST, TAGS, asset_receipt, digest, eligible, get_managed, verify_local
 
 EVIDENCE = "hardware-evidence.json"
 FUNCTIONS = {"boot", "reboot", "memory", "wifi", "network", "packages", "local_monitoring", "recovery"}
@@ -75,7 +75,7 @@ def verify_candidate(directory: Path, manifest: dict, key_fingerprint: str) -> N
 
 
 def timestamp(value: str) -> datetime:
-    moment = datetime.fromisoformat(value)
+    moment = datetime.fromisoformat(value[:-1] + "+00:00" if value.endswith("Z") else value)
     if moment.utcoffset() != timedelta(0):
         raise ValueError("Hardware evidence timestamps must use UTC")
     return moment
@@ -108,12 +108,18 @@ def beta_manifest(github: GitHub, directory: Path, tag: str, commit: str) -> dic
     release = get_managed(github.releases(), "beta", tag)
     if release is None or not eligible(release, "beta") or github.tag_commit(tag) != commit:
         raise ValueError("Promotion requires a verified immutable Beta at the exact source commit")
+    asset_receipt(release)
     github.download(release, directory, MANIFEST)
     path = directory / MANIFEST
     digests = [asset["digest"] for asset in release["assets"] if asset["name"] == MANIFEST]
     if digests != [f"sha256:{digest(path)}"]:
         raise ValueError("Beta manifest does not match its published checksum")
-    return json.loads(path.read_text())
+    manifest = json.loads(path.read_text())
+    published = {asset["name"]: {"sha256": asset["digest"][7:], "size": asset["size"]}
+                 for asset in release["assets"] if asset["name"] != MANIFEST}
+    if manifest["assets"] != published:
+        raise ValueError("Published Beta assets differ from its verified manifest")
+    return manifest
 
 
 def verify_promotion(directory: Path, manifest: dict, beta: dict) -> None:
@@ -150,14 +156,18 @@ def main() -> int:
         if args.operation == "prepare":
             if not TAGS["stable"].fullmatch(args.tag) or not args.beta or not args.evidence:
                 parser.error("Prepare requires a Stable tag, Beta tag and local hardware evidence")
-            if "promotion" in manifest or EVIDENCE in manifest["assets"]:
-                raise ValueError("Prepare Stable from a fresh copy of the Beta assets")
             evidence = args.evidence.read_bytes()
-            manifest["promotion"] = {"beta_tag": args.beta, "stable_tag": args.tag}
-            manifest["assets"][EVIDENCE] = {"sha256": hashlib.sha256(evidence).hexdigest(), "size": len(evidence)}
-            verify_hardware(json.loads(evidence), manifest, timedelta(hours=72))
+            report_asset = {"sha256": hashlib.sha256(evidence).hexdigest(), "size": len(evidence)}
+            promotion = {"beta_tag": args.beta, "stable_tag": args.tag}
             if args.beta.split("-beta.")[0] != args.tag or not TAGS["beta"].fullmatch(args.beta):
                 raise ValueError("Stable must use the same base version as its Beta")
+            verify_hardware(json.loads(evidence), manifest, timedelta(hours=72))
+            if "promotion" in manifest or EVIDENCE in manifest["assets"]:
+                if manifest.get("promotion") == promotion and manifest["assets"].get(EVIDENCE) == report_asset:
+                    return 0
+                raise ValueError("Prepared directory differs from the requested Beta or evidence; use fresh Beta assets")
+            manifest["promotion"] = promotion
+            manifest["assets"][EVIDENCE] = report_asset
             for profile in manifest["profiles"]:
                 for image in profile["images"]:
                     image["hardware_verification"] = "stability-tested"

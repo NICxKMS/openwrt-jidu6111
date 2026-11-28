@@ -1,6 +1,6 @@
 # Hardware verification
 
-Use an authorized JIDU6111, wired management, local rollback files and [installation precautions](../README.md#install-on-the-router). Record the exact image checksum, firmware source, compiler and radio. Before upgrading, record the installed build and package versions with `make verify-router ROUTER=ADDRESS`. It uses read-only SSH with a known host key.
+Use an authorized JIDU6111, wired management, local rollback files and [installation precautions](../README.md#install-on-the-router). Record the exact image checksum, firmware source, compiler and radio. Before upgrading, run `make verify-router ROUTER=ADDRESS` to record the installed build, kernel APK and both monitoring APK versions. It uses read-only SSH with a known host key. Save the full package list using the installation instructions.
 
 | Check key | Observations |
 | --- | --- |

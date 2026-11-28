@@ -12,6 +12,9 @@ default_branch=$(gh api "repos/$repo" --jq .default_branch)
 [[ $default_branch == main ]] || { echo 'Release publication requires main as the default branch.' >&2; exit 1; }
 main=$(gh api "repos/$repo/git/ref/heads/main" --jq .object.sha)
 [[ $commit =~ ^[0-9a-f]{40}$ ]] || exit 2
+if ! git cat-file -e "$main^{commit}" 2>/dev/null; then
+    git fetch --no-tags "https://github.com/$repo.git" "$main"
+fi
 git merge-base --is-ancestor "$commit" "$main" || {
     echo 'Source must be reachable from the current origin/main. Fetch and verify the release source.' >&2
     exit 1
@@ -20,11 +23,9 @@ case "$operation" in
     beta) channel=beta ;;
     stable)
         channel=stable
-        if [[ ! -f "$output/hardware-evidence.json" ]]; then
-            python3 -B scripts/promotion.py prepare --commit "$commit" --tag "$tag" \
-                --beta "${JIDU_OP_BETA:?Set BETA to the verified Beta tag}" \
-                --evidence "${JIDU_OP_EVIDENCE:?Set EVIDENCE to the hardware report}" --directory "$output"
-        fi
+        python3 -B scripts/promotion.py prepare --commit "$commit" --tag "$tag" \
+            --beta "${JIDU_OP_BETA:?Set BETA to the verified Beta tag}" \
+            --evidence "${JIDU_OP_EVIDENCE:?Set EVIDENCE to the hardware report}" --directory "$output"
         ;;
     *) printf '%s\n' 'Choose beta or stable.' >&2; exit 2 ;;
 esac

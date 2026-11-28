@@ -36,6 +36,8 @@ def verify_inputs(report: bool) -> None:
     for row in rows:
         path = ROOT / row["path"]
         contents = path.read_bytes()
+        if not row["purpose"].strip() or not row["upstream_status"].strip():
+            raise ValueError(f"Missing purpose or upstream status for {row['id']}")
         dependencies = row.get("depends_on", [])
         if any(dep not in inventory or (ROOT / inventory[dep]["path"]).parent != path.parent
                or inventory[dep]["path"] >= row["path"] for dep in dependencies):
@@ -48,8 +50,7 @@ def verify_inputs(report: bool) -> None:
         first = re.search(rb"(?m)^--- (?:a/|/dev/null)", contents)
         if not paths or first is None:
             raise ValueError(f"Missing unified diff for {row['id']}")
-        changes = re.findall(rb"(?m)^[-+].*", contents[first.start():])
-        identity = hashlib.sha256(re.sub(rb"[ \t]", b"", b"\n".join(changes))).digest()
+        identity = hashlib.sha256(contents[first.start():].split(b"\n-- \n", 1)[0]).digest()
         if identity in patch_ids:
             raise ValueError(f"Duplicate patch content for {row['id']}")
         patch_ids.add(identity)

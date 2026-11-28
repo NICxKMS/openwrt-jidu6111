@@ -3,11 +3,11 @@
 from dataclasses import dataclass
 import hashlib
 import json
+from pathlib import Path
 import re
 import shutil
-
 import tarfile
-from urllib.error import HTTPError
+from tempfile import TemporaryDirectory
 from urllib.parse import quote, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
@@ -72,28 +72,17 @@ def asset_url(tag, filename):
     return f"https://github.com/{REPO}/releases/download/{quote(tag, safe='')}/{quote(filename, safe='')}"
 
 
-def channel_release(channel: str):
+def releases_by_version():
     api = f"https://api.github.com/repos/{REPO}/releases"
-    if channel == "stable":
-        try:
-            release = read_json(f"{api}/latest")
-        except HTTPError as error:
-            if error.code != 404:
-                raise
-            return None
-        return release if eligible(release, "stable") else None
-
-    best = None
+    releases = []
     for page in range(1, 101):
         suffix = "" if page == 1 else f"&page={page}"
-        releases = read_json(f"{api}?per_page=100{suffix}")
-        if not isinstance(releases, list):
+        batch = read_json(f"{api}?per_page=100{suffix}")
+        if not isinstance(batch, list):
             raise RuntimeError("GitHub returned an invalid release list.")
-        for release in releases:
-            if eligible(release, "beta") and (best is None or version_key(release["tag_name"]) > version_key(best["tag_name"])):
-                best = release
-        if len(releases) < 100:
-            return best
+        releases.extend(entry for entry in batch if eligible(entry, "stable") or eligible(entry, "beta"))
+        if len(batch) < 100:
+            return sorted(releases, key=lambda entry: version_key(entry["tag_name"]), reverse=True)
     raise RuntimeError("Release history exceeds the discovery limit")
 
 
@@ -115,10 +104,9 @@ def release_manifest(release):
 
 def select_feed(router, channel="auto", profile=None):
     channels = ("stable", "beta") if channel == "auto" else (channel,)
-    for current in channels:
-        release = channel_release(current)
-        if release is None:
-            continue
+    releases = releases_by_version()
+    candidates = ((current, entry) for current in channels for entry in releases if eligible(entry, current))
+    for current, release in candidates:
         manifest = release_manifest(release)
         compatible = [
             entry for entry in manifest["profiles"] if isinstance(entry, dict)
@@ -190,7 +178,6 @@ def extract_feed(archive, destination):
 
 
 def download_feed(selection, directory):
-    archive = directory / selection.asset
     checksum = hashlib.sha256()
     remaining = selection.size
     if shutil.disk_usage(directory).free < remaining:
@@ -198,16 +185,21 @@ def download_feed(selection, directory):
     request = Request(
         asset_url(selection.tag, selection.asset), headers={"User-Agent": "JIDU6111-Package-Dashboard"}
     )
-    with urlopen(request, timeout=60) as response, archive.open("xb") as target:
-        while chunk := response.read(min(1024 * 1024, remaining + 1)):
-            remaining -= len(chunk)
-            if remaining < 0:
-                raise RuntimeError("The package feed download exceeded its expected size.")
-            checksum.update(chunk)
-            target.write(chunk)
-    if remaining or checksum.hexdigest() != selection.sha256:
-        raise RuntimeError("The package feed download failed size or checksum verification.")
     feed = directory / "feed"
-    extract_feed(archive, feed)
-    archive.unlink()
+    if feed.exists() or feed.is_symlink():
+        raise FileExistsError(feed)
+    with TemporaryDirectory(dir=directory, prefix=".feed-") as work:
+        archive = Path(work) / selection.asset
+        with urlopen(request, timeout=60) as response, archive.open("xb") as target:
+            while chunk := response.read(min(1024 * 1024, remaining + 1)):
+                remaining -= len(chunk)
+                if remaining < 0:
+                    raise RuntimeError("The package feed download exceeded its expected size.")
+                checksum.update(chunk)
+                target.write(chunk)
+        if remaining or checksum.hexdigest() != selection.sha256:
+            raise RuntimeError("The package feed download failed size or checksum verification.")
+        extracted = Path(work) / "feed"
+        extract_feed(archive, extracted)
+        extracted.rename(feed)
     return feed

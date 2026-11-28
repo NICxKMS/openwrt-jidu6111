@@ -6,6 +6,7 @@ paths:
 - scripts/firmware_artifacts.py
 - scripts/promotion.py
 - scripts/release_*.py
+- scripts/release-operator.sh
 - '**/sha256sums'
 - '**/*.manifest'
 - '**/*.bin'

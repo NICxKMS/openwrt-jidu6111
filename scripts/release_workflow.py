@@ -247,8 +247,11 @@ def stage(github, channel: str, tag: str, commit: str, directory: pathlib.Path, 
             github.upload(tag, path)
         elif uploaded[name].get("digest") != f"sha256:{digest(path)}":
             raise ValueError(f"Draft asset differs from the candidate: {name}")
+    tagged_commit = github.tag_commit(tag, missing_ok=True)
     if tagged_commit is None:
         github.api("git/refs", method="POST", data={"ref": f"refs/tags/{tag}", "sha": commit})
+    elif tagged_commit != commit:
+        raise ValueError("The draft tag differs from the verified source commit")
 
 
 def asset_receipt(entry) -> str:

@@ -50,6 +50,7 @@ key=$(realpath -e -- "$key")
 for tool in awk flock git make openssl python3 unsquashfs; do
     command -v "$tool" >/dev/null || fail "Missing build dependency: $tool"
 done
+python3 -c 'import sys; sys.exit(sys.version_info < (3, 10))' || fail 'Release builds require Python 3.10 or newer.'
 llvm_prefix= llvm_suffix=
 if [[ ! $profile || $profile == clang-thinlto ]]; then
     export KERNEL_LLVM=${KERNEL_LLVM:-1}
@@ -113,7 +114,7 @@ for current_profile in "${profiles[@]}"; do
     ln -s -- "$workspace/downloads" "$openwrt/dl"
     openssl pkey -in "$key" -passin pass: -pubout -out "$openwrt/public-key.pem"
     ln -s -- "$key" "$openwrt/private-key.pem"
-    make -C "$source" "configure-$current_profile"
+    make -C "$source" "configure-$current_profile" BUILD_RADIO=both
     for required in CONFIG_USE_APK=y CONFIG_SIGNED_PACKAGES=y CONFIG_SIGN_EACH_PACKAGE=y; do
         grep -Fqx -- "$required" "$openwrt/.config" || fail "Required APK setting missing: $required"
     done
