@@ -1,0 +1,84 @@
+name: Firmware repository checks
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      patch_apply:
+        description: Prepare patched kernel and networking package sources
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+concurrency:
+  group: checks-${{ github.workflow }}-${{ github.ref }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || 'source' }}
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
+
+jobs:
+  scope:
+    runs-on: ubuntu-24.04
+    outputs:
+      feed: ${{ steps.paths.outputs.feed }}
+      patches: ${{ steps.paths.outputs.patches }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - id: paths
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          if [[ "$EVENT" == workflow_dispatch ]] || ! git cat-file -e "$BASE^{commit}" 2>/dev/null; then
+            echo 'feed=true' >> "$GITHUB_OUTPUT"
+          else
+            changed="$RUNNER_TEMP/changed-files"
+            git diff --name-only "$BASE" HEAD -- . ':(exclude)*.md' > "$changed"
+            if grep -Eq '^(Makefile$|config/|sources/|scripts/(apply-feed-patches|bootstrap-source|build-firmware|configure-reflash|firmware_artifacts)[.]|[.]github/workflows/firmware-checks[.]yml$)' "$changed"; then
+              echo 'feed=true' >> "$GITHUB_OUTPUT"
+            fi
+            if grep -Eq '^sources/(openwrt[.](commit|patch)|openwrt/.*[.]patch)$' "$changed"; then
+              echo 'patches=true' >> "$GITHUB_OUTPUT"
+            fi
+          fi
+          python3 -B scripts/check_sources.py --report
+          python3 -B -m unittest discover -s scripts/tests -v
+          for script in scripts/*.sh; do bash -n "$script"; done
+          if git cat-file -e "$BASE^{commit}" 2>/dev/null; then git diff --check "$BASE" HEAD; fi
+
+  verify-feed:
+    needs: scope
+    if: needs.scope.outputs.feed == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Prepare immutable sources and verify both compiler configurations
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential flex bison bc gawk gettext libelf-dev libncurses-dev \
+            libssl-dev python3-dev python3-setuptools rsync unzip zstd
+          make source feeds configure-clang-thinlto configure-gcc-kernel
+          grep -Fqx 'Package: nicx-telemetry' openwrt/feeds/nicx_monitor.index
+          grep -Fqx 'Package: luci-app-nicx-telemetry' openwrt/feeds/nicx_monitor.index
+      - if: inputs.patch_apply || needs.scope.outputs.patches == 'true'
+        name: Apply kernel and networking package patches
+        run: >-
+          make -C openwrt target/linux/prepare package/kernel/mac80211/prepare
+          package/network/services/hostapd/prepare package/network/utils/iw/prepare
+          package/network/utils/iwinfo/prepare
+
+  required:
+    name: Required repository checks
+    if: always()
+    needs: [scope, verify-feed]
+    runs-on: ubuntu-24.04
+    env:
+      SCOPE: ${{ needs.scope.result }}
+      FEED: ${{ needs.verify-feed.result }}
+    steps:
+      - run: '[[ "$SCOPE" == success && ( "$FEED" == success || "$FEED" == skipped ) ]]'

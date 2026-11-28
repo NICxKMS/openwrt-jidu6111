@@ -1,3 +1,1 @@
-# Monitor changes belong to the platform owner; firmware ownership is unchanged.
-/nicx-router-monitor/ @NICxKMS
-/.github/workflows/nicx-router-monitor.yml @NICxKMS
+/.github/workflows/ @NICxKMS

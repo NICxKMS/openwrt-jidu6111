@@ -2,8 +2,10 @@
 !/.gitignore
 !/Makefile
 !/README.md
+!/AGENTS.md
 !/config/
 !/scripts/
 !/sources/
-!/nicx-router-monitor/
 !/.github/
+**/__pycache__/
+!/docs/

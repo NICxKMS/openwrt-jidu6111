@@ -14,7 +14,7 @@ CONFIG_KERNEL_IRQ_TIME_ACCOUNTING=y
 CONFIG_KERNEL_SLUB_DEBUG=y
 # CONFIG_KERNEL_SLUB_DEBUG_ON is not set
 
-# Include the telemetry service and preserve the legacy internet/system collectors during cutover.
+# Include local telemetry, traffic accounting and system statistics.
 CONFIG_PACKAGE_luci-app-nicx-telemetry=y
 CONFIG_PACKAGE_vnstat2=y
 CONFIG_PACKAGE_luci-app-nlbwmon=y

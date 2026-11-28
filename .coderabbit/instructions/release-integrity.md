@@ -2,7 +2,11 @@
 id: repo-release-integrity
 name: Firmware release integrity
 paths:
-- packages/**
+- sources/feeds.conf
+- scripts/firmware_artifacts.py
+- scripts/promotion.py
+- scripts/release_*.py
+- scripts/release-operator.sh
 - '**/sha256sums'
 - '**/*.manifest'
 - '**/*.bin'

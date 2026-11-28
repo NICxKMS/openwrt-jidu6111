@@ -2,6 +2,12 @@
 
 This workspace builds the community `qualcommbe/ipq95xx` profile for the JIDU6111 on Linux **6.18.65**. The editable OpenWrt checkout is `openwrt/`. The base image includes LuCI with HTTPS, routing, DHCP, DNS, firewall, Ethernet and USB controller drivers, and both ath11k radios with their firmware and JIDU board data.
 
+## Downloads and variants
+
+Use [GitHub Releases](https://github.com/NICxKMS/openwrt-jidu6111/releases) for Stable and Beta downloads. **Stable** is hardware verified and the newest eligible version appears as Latest. **Beta** is a verified build candidate. The release manifest and notes identify which hardware tests were performed. Until replacement downloads are available, use the [existing image and matching signed feed archive](https://github.com/NICxKMS/openwrt-jidu6111/tree/router).
+
+Choose the compiler and radio variant from the same release as its signed feed. Use dual-band for 2.4 GHz and 5 GHz, or WCSS-off to keep 5 GHz and free the 43 MiB WCSS reservation. The filename identifies both selections. GCC is the fallback kernel compiler. See [installation and recovery](#install-on-the-router) and [release operations](docs/release-operations.md).
+
 ## Install build tools and build
 
 Run these in your Ubuntu or Debian terminal as your normal user. `make host-deps` uses `sudo` to install the system packages. `make source` applies the tracked patches and board data to the pinned OpenWrt checkout. You can reuse a checkout prepared with the same wrapper revision. When updating the wrapper, save any local changes and move the previous generated `openwrt/` checkout aside before running `make source` so the current overlays and feed pins are applied.
@@ -36,12 +42,14 @@ make build-clang-thinlto JOBS=8
 
 Each profile builds both radio variants, for **four sysupgrade images** across the two profiles. Pick the radio variant within your chosen profile.
 
+The firmware includes two monitoring recipes from the pinned external OpenWrt feed. The manifest records their bundled versions and source commit. Router inventory reports the installed versions separately. See [package building and trust](docs/packages.md).
+
 | Radio choice | Sysupgrade filename ending |
 | --- | --- |
 | **Dual-band** for 2.4 GHz and 5 GHz | `jidu6111-squashfs-sysupgrade.bin` |
 | **5 GHz only** to free the 43 MiB WCSS reservation | `jidu6111-wcss-off-squashfs-sysupgrade.bin` |
 
-The two profiles use the same filenames and JIDU6111 device ID. Each image must use the signed APK feed from its own build profile. In each output root, `targets/qualcommbe/ipq95xx/` holds the images, manifests and `sha256sums`, while `repository/` holds the signed APK feed. From the image directory, run `sha256sum -c sha256sums` before uploading.
+OpenWrt's local build keeps the same filenames under compiler-specific directories. Official release asset names include the compiler and radio. Each image must use the signed APK feed from its own build profile. In each output root, `targets/qualcommbe/ipq95xx/` holds the images, manifests and `sha256sums`, while `repository/` holds the signed APK feed. From the image directory, run `sha256sum -c sha256sums` before uploading.
 
 Edit `config/jidu6111-reflash.diffconfig` to persist package changes for both reflash profiles. `make save-config` saves changes from the standard profile.
 
@@ -54,29 +62,17 @@ make build-clang-thinlto KERNEL_LLVM=-15
 
 For another versioned toolchain, pass its suffix (for example, `KERNEL_LLVM=-21`) or an absolute tool directory ending in `/`. Both profiles use smaller ath11k RX buffers and include AdGuard Home, Nicx Router Monitor, vnStat, nlbwmon, collectd and zram.
 
-#### CPU and memory monitoring
+#### Resource use
 
-- The Memory page compares RAM declared by the device tree with Linux-managed RAM and shows named firmware reservations separately. Within Linux-managed RAM it shows anonymous pages, shared memory and tmpfs, file cache, slab, page tables, stacks, and the signed difference between the measured categories and total. It also shows slab backing pages, kernel allocation sites when profiling is enabled, page-zone watermarks and free-block sizes, process PSS and swap, zram, socket memory and pressure stalls.
-- The CPU page shows aggregate and per-core time by state, including hardware and software IRQ time, the busiest tasks, scheduling and interrupt counters, CPU frequency where supported, and temperatures. Existing WAN and USB WAN collection, Wi-Fi, storage, connectivity and service health continue alongside it.
-- Both reflash kernels enable IRQ-time accounting, SLUB counters and pressure stalls. Linux and device firmware expose different views of RAM and some counters overlap. The dashboard shows the difference explicitly. Allocation-site profiling is optional. To enable it, add `CONFIG_KERNEL_MEM_ALLOC_PROFILING=y` and `CONFIG_KERNEL_MEM_ALLOC_PROFILING_ENABLED_BY_DEFAULT=y` to `config/jidu6111-reflash.diffconfig` before building. Its router memory and throughput costs still need measurement.
-
-The firmware installs the agent version pinned in the [package feed list](sources/feeds.conf). The [dashboard update](https://github.com/NICxKMS/openwrt-jidu6111/pull/7) uses the same enrollment and telemetry schema. Existing local monitoring databases remain part of the backup procedure below.
-
-**Migration from the old names.** `make build-optimized` and `openwrt/bin-optimized/` became `make build-gcc-kernel` and `openwrt/bin-gcc-kernel/`. `make build-thinlto` and `openwrt/bin-thinlto/` became `make build-clang-thinlto` and `openwrt/bin-clang-thinlto/`. For configuration only, use `make configure-gcc-kernel` or `make configure-clang-thinlto`.
-
-1. Connect by Ethernet. Save the current sysupgrade image, matching APKs, configuration backup and package list. Confirm the backup contains the telemetry keep files under `/etc/nicx-telemetry/` and `/etc/config/nicx-telemetry`. Keep that archive private.
-2. Back up the actual vnStat, nlbwmon and RRD database directories separately. Resolve their configured paths first, since a configuration backup can omit those directories. Back up existing AdGuard Home configuration and data if present.
-3. Confirm the board ID is `jiorouter,ax6000-jidu6111`. Verify the selected image checksum, upload the image and run `sysupgrade -T` on it. Flash only after the router accepts the image. Keep settings when flashing. Follow the migration guidance below for an older board ID.
-4. After reboot, verify Ethernet, WAN and USB WAN, DNS, 5 GHz and fresh telemetry under the same enrolled device. Verify 2.4 GHz on the dual-band image. For the WCSS-off image, check that the radio is absent and compare `MemTotal` under comparable boot conditions.
-5. Set up AdGuard Home on an alternate DNS port and test it before changing dnsmasq forwarding. Keep dnsmasq serving DHCP and local names. During cutover, point dnsmasq at AdGuard Home and give AdGuard Home independent upstream resolvers. Start with one filter list and leave DNS query logging off if you only need traffic totals. Disable the old DNS blocker after the new DNS path works. Verify webapp WAN and USB history against the local collectors before retiring any overlapping service.
+The reflash profiles enable IRQ accounting, pressure stalls, process memory counters and SLUB statistics. Leave allocation-site profiling off for normal operation. The profiles include vnStat, nlbwmon and collectd for different interface, client and system statistics. Keep their existing databases when upgrading. Compare idle memory, slab, throughput and reliability under the same workload before changing defaults. See the [hardware test procedure](docs/hardware-testing.md).
 
 The standard `make build` writes firmware images, the build manifest, and checksums to `openwrt/bin/targets/qualcommbe/ipq95xx/`. Target APKs are under that target directory and feed APKs are in `openwrt/bin/packages/`.
 
-Downloads are reused from `openwrt/dl/`. The JIDU6111 profile enables compiler caching in `openwrt/.ccache/` and per-component logs in `openwrt/logs/`. `make cache-stats` reports compiler cache hits and size. Incremental builds reuse the existing toolchain and build files in `openwrt/staging_dir/` and `openwrt/build_dir/`. `make distclean` removes these build files, downloads, cache, and APK signing keys.
+The interactive OpenWrt targets share the generated checkout in your worktree. Use them for local experiments. Release builds use the isolated `make build-firmware` entry point, keep downloads and intermediates in its disposable workspace and preserve the independently stored signing key.
 
 ## Add packages
 
-The profile builds the following features as signed APKs. Install the ones you need after the router is running the matching firmware.
+The following features are available as signed APKs. The reflash profiles already bundle AdGuard Home, usage and system statistics, and zram. Install others as needed from the feed that matches your firmware.
 
 | Feature | Package to install |
 | --- | --- |
@@ -101,7 +97,7 @@ make package PACKAGE=htop
 make package-index
 ```
 
-After a fresh checkout, perform a full build once to create the toolchain and signing keys. A userspace package can be added without a firmware rebuild if its dependencies work with the installed firmware. This profile already compiles the kernel modules needed by its APKs, including CAKE and IFB. A new feature that changes the kernel configuration can require a new firmware build and a matching set of kernel modules. Keep the source revisions, feed pins, and original signing keys for the installed image.
+Reuse a prepared build tree or compatible SDK for package-only builds. See the [package build and signing guide](docs/packages.md). A userspace package can be added without a firmware rebuild if its dependencies work with the installed firmware. This profile already compiles the kernel modules needed by its APKs, including CAKE and IFB. A new feature that changes the kernel configuration can require a new firmware build and a matching set of kernel modules. Keep the source revisions, feed pins, and original signing keys for the installed image.
 
 You can also edit `config/jidu6111.diffconfig` directly and run `make configure` to apply it. This replaces `openwrt/.config` and saves the previous configuration as `openwrt/.config.old`. Select `<*>` or `=y` only for packages you want to include in the next firmware image.
 
@@ -144,9 +140,11 @@ Work inside `openwrt/`. Normal OpenWrt build commands and Git work there. To kee
 
 ## Install on the router
 
-1. Check the label for **JIDU6111**. In the build output, choose the image ending in `jiorouter_ax6000-jidu6111-squashfs-sysupgrade.bin` and verify it against `sha256sums`. The `jiorouter_ax6000-jidu6111-initramfs-uImage.itb` image is for a temporary RAM boot.
-2. If the router already runs OpenWrt, save its configuration and check `ubus call system board`. Use the regular sysupgrade image for `jiorouter,ax6000-jidu6111`. For the older `jiorouter,ax6000-jidu6j11-6111` board ID, use the dated migration image under `migration/` and verify it against the checksum in that folder. Upload the selected image to `/tmp` on the router and run `sysupgrade -T /tmp/<image-name>.bin`. If validation succeeds, use LuCI's **Backup / Flash Firmware** screen or run `sysupgrade /tmp/<image-name>.bin`. Run the check again after uploading a newer image. Keep the downloaded configuration backup on your computer.
-3. For a first install from stock, follow the device maintainer's [UART/TFTP and RAM-boot instructions](https://github.com/openwrt/openwrt/pull/26498). The 6111 uses **3.3 V UART at 115200 8N1**. Back up `0:ART`, `MFG`, `0:BDF`, and the U-Boot environment before flashing. Check both Ethernet and Wi-Fi radios on the RAM boot before writing NAND.
+1. Check the case label for **JIDU6111**. Confirm the board using `ubus call system board`. Choose the matching sysupgrade image and compare its SHA-256 with the release manifest before uploading. The `initramfs-uImage.itb` image produced by the OpenWrt build is for temporary RAM boot.
+2. Connect by Ethernet and back up the LuCI configuration, package list, existing image and matching signed feed. Keep a private copy of `/etc/config/nicx-telemetry`, applicable files under `/etc/nicx-telemetry/`, and the actual configured vnStat, nlbwmon and collectd/RRD database paths. Save DNS filtering configuration and data where used.
+3. The regular image expects `jiorouter,ax6000-jidu6111`. For `jiorouter,ax6000-jidu6j11-6111`, the dated JIDU6111 board-ID transition image and its checksum are required. Use your verified local copy of the November 19, 2026 transition image. If you lack that image or its checksum, stop and obtain the matching recovery files. Run `sysupgrade -T /tmp/<image-name>.bin` before every flash. Proceed in LuCI or with `sysupgrade /tmp/<image-name>.bin` only after validation. Keep settings for a compatible upgrade.
+4. After reboot, check the build identity, Ethernet, WAN, DNS, radios, package trust and any enabled local monitoring services. Check WAN6 and USB WAN where configured.
+5. For first installation from stock, use the device maintainer's UART/TFTP and RAM-boot procedure. The JIDU6111 uses **3.3 V UART at 115200 8N1**. Back up `0:ART`, `MFG`, `0:BDF` and the U-Boot environment before writing NAND. Verify Ethernet and both radios on the dual-band RAM boot. [JIDU6111 board support and installation](https://github.com/openwrt/openwrt/pull/26498)
 
 ### Connect behind an upstream router
 
@@ -160,6 +158,10 @@ If both routers perform NAT, outbound IPv4 traffic uses double NAT. Inbound port
 - The image includes `nano`, `tcpdump-mini`, `ethtool`, and `lsusb` for inspecting settings and diagnosing the uplink over local SSH. It can read USB storage formatted as ext4, FAT, or exFAT. Use `block info` to identify the backup drive.
 - Android USB tethering ships in the image. Create and test a DHCP uplink for your phone in LuCI before you need it. Give the backup interface a higher route metric than the primary WAN if you configure both. The backup takes over when the primary route goes away. Detecting an upstream outage while the Ethernet link stays up requires separate configuration.
 - Download a configuration backup from LuCI and keep a copy of the matching RAM-boot image and checksum on your computer. To recover from a configuration lockout, disconnect the upstream cable, plug your computer directly into LAN1, and enter [OpenWrt failsafe](https://openwrt.org/docs/guide-user/troubleshooting/failsafe_and_factory_reset). Set the computer to `192.168.1.10/24`, connect with `ssh root@192.168.1.1`, and use `mount_root` to access saved settings. If OpenWrt cannot boot, use the UART/TFTP recovery path above.
+
+## Development and limitations
+
+Open firmware changes against `main`, using a temporary development branch and a separate worktree. Run `make test-release` and `make patch-report` locally. The pinned board support is a community build. Hardware and performance results apply to the tested image and configuration. Full image builds require substantial local disk space. Follow the [release guide](docs/release-operations.md) and [contributor instructions](AGENTS.md).
 
 ## Source revisions
 

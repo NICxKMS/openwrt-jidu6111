@@ -1,0 +1,88 @@
+name: Publish JIDU6111 firmware
+on:
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: Firmware release channel
+        type: choice
+        options: [beta, stable]
+        required: true
+      source_commit:
+        description: Exact firmware source commit reachable from main
+        type: string
+        required: true
+      tag:
+        description: Exact staged release tag
+        type: string
+        required: true
+      manifest_sha:
+        description: SHA-256 of the staged manifest
+        type: string
+        required: true
+
+permissions:
+  contents: read
+concurrency:
+  group: jidu6111-release-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: github.repository == 'NICxKMS/openwrt-jidu6111' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    environment: firmware-release
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - name: Check maintainer approval
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MAINTAINER: ${{ vars.JIDU6111_RELEASE_MAINTAINER }}
+        run: |
+          set -euo pipefail
+          test -n "$MAINTAINER"
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/approvals" |
+            jq -e --arg user "$MAINTAINER" '
+              any(.[]; .state == "approved" and
+                (.user.login | ascii_downcase) == ($user | ascii_downcase) and
+                any(.environments[]; .name == "firmware-release"))
+            ' >/dev/null
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Independently verify release assets
+        id: verify
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CHANNEL: ${{ inputs.channel }}
+          SOURCE: ${{ inputs.source_commit }}
+          TAG: ${{ inputs.tag }}
+          MANIFEST_SHA: ${{ inputs.manifest_sha }}
+          FIRMWARE_KEY_SHA256: ${{ vars.JIDU6111_FIRMWARE_KEY_SHA256 }}
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE" =~ ^[0-9a-f]{40}$ && "$MANIFEST_SHA" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$(git cat-file -t "$SOURCE")" == commit ]]
+          git merge-base --is-ancestor "$SOURCE" "$GITHUB_SHA"
+          assets=$(mktemp -d "$RUNNER_TEMP/jidu-assets.XXXXXXXX")
+          receipt=$(python3 -B scripts/release_workflow.py fetch --channel "$CHANNEL" \
+            --tag "$TAG" --commit "$SOURCE" --directory "$assets")
+          printf '%s  %s\n' "$MANIFEST_SHA" "$assets/release-manifest.json" | sha256sum --check -
+          python3 -B scripts/promotion.py verify --directory "$assets" --tag "$TAG" --commit "$SOURCE"
+          docker run --rm --security-opt=no-new-privileges -v "$PWD/scripts:/scripts:ro" -v "$assets:/assets:ro" \
+            alpine:3.23@sha256:469c9ea410b9215eaee7976ba6c0639039b444be8e5d638f7abbada189971eb2 \
+            sh -ec 'apk add --no-cache python3=3.12.16-r0 squashfs-tools=4.7.4-r0; python3 -B /scripts/firmware_artifacts.py verify --directory /assets --apk /sbin/apk'
+          printf 'receipt=%s\n' "$receipt" >> "$GITHUB_OUTPUT"
+
+      - name: Publish the approved draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CHANNEL: ${{ inputs.channel }}
+          SOURCE: ${{ inputs.source_commit }}
+          TAG: ${{ inputs.tag }}
+          RECEIPT: ${{ steps.verify.outputs.receipt }}
+        run: |
+          python3 -B scripts/release_workflow.py publish --channel "$CHANNEL" \
+            --tag "$TAG" --commit "$SOURCE" --receipt "$RECEIPT"
