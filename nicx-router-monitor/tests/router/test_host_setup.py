@@ -1,8 +1,10 @@
 """Host-only setup security tests; never contacts Telegram, Cloudflare or a router."""
 import importlib.util
+import json
 from pathlib import Path
 from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 PATH = Path(__file__).resolve().parents[2] / 'scripts/configure-telegram.py'
 spec = importlib.util.spec_from_file_location('telegram_setup', PATH)
@@ -21,8 +23,24 @@ class HostSetup(unittest.TestCase):
             calls.append((command, kwargs))
             return SimpleNamespace(returncode=0)
         secret = '123456:fixture-not-a-real-telegram-token'
-        setup.store_secrets(secret, '123', '00000000-0000-4000-8000-000000000001', runner)
-        self.assertEqual(len(calls), 3)
-        self.assertEqual(calls[0][1]['input'], secret + '\n')
-        self.assertNotIn(secret, ' '.join(str(x) for x in calls[0][0]))
-        self.assertNotIn(secret, str(calls[0][1]['env']))
+        chat = '984561293087564102'
+        owner = '00000000-0000-4000-8000-000000000001'
+        with (
+            patch.object(setup.shutil, 'which', return_value='/fixture/bin/node'),
+            patch.object(Path, 'is_file', return_value=True),
+            patch.dict('os.environ', {'WRANGLER_WRITE_LOGS': 'true', 'WRANGLER_LOG_SANITIZE': 'false'}),
+        ):
+            setup.store_secrets(secret, chat, owner, runner)
+        self.assertEqual(len(calls), 1)
+        command, options = calls[0]
+        self.assertEqual(command[-2:], ['secret', 'bulk'])
+        values = {
+            'TELEGRAM_BOT_TOKEN': secret, 'TELEGRAM_CHAT_ID': chat, 'TELEGRAM_OWNER_ID': owner,
+        }
+        self.assertEqual(json.loads(options['input']), values)
+        for name, value in values.items():
+            with self.subTest(secret=name):
+                self.assertNotIn(value, ' '.join(str(x) for x in command))
+                self.assertNotIn(value, str(options['env']))
+        self.assertEqual(options['env']['WRANGLER_WRITE_LOGS'], 'false')
+        self.assertEqual(options['env']['WRANGLER_LOG_SANITIZE'], 'true')
