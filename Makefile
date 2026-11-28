@@ -4,6 +4,8 @@
 JOBS ?= 4
 PROFILE := CONFIG_TARGET_qualcommbe_ipq95xx_DEVICE_jiorouter_ax6000-jidu6111=y
 REFLASH_PROFILE := CONFIG_TARGET_DEVICE_qualcommbe_ipq95xx_DEVICE_jiorouter_ax6000-jidu6111=y
+WCSS_PROFILE := CONFIG_TARGET_DEVICE_qualcommbe_ipq95xx_DEVICE_jiorouter_ax6000-jidu6111-wcss-off=y
+export JIDU6111_RADIO := $(BUILD_RADIO)
 
 .PHONY: help host-deps source feeds configure configure-gcc-kernel configure-clang-thinlto menuconfig save-config check download build build-gcc-kernel build-clang-thinlto package package-index cache-stats
 
@@ -25,20 +27,19 @@ help:
 	  'make build        Build the JIDU6111 images and APKs (JOBS=4 by default)' \
 	  'make build-clang-thinlto       Try first: Clang ThinLTO kernel and modules' \
 	  'make build-gcc-kernel          Fallback: GCC kernel and modules, kernel LTO off' \
-	  '                               Each produces two radio images and a signed APK feed.' \
+	  '                               Add BUILD_RADIO=dual-band or wcss-off for local single-radio builds.' \
 	  'make package PACKAGE=<name>   Build a selected package and its dependencies' \
 	  'make package-index           Refresh the signed APK indexes and combined repository' \
 	  'make build-firmware          Build from an exact commit in a disposable workspace' \
-	  'make test-release            Run release, installer and promotion tests' \
-	  'make release-dev             Stage verified assets and request Development publication' \
-	  'make reserve-stable          Reserve a Stable draft for an approved promotion' \
-	  'make stage-stable            Upload verified assets to the reserved Stable draft' \
-	  'make promote                 Request approval to publish verified production' \
+	  'make test-release            Run firmware release and compatibility tests' \
+	  'make release-beta            Stage a Beta draft and request publication' \
+	  'make promote                 Stage the exact Beta artifacts and request Stable approval' \
 	  'make verify-router           Read board, installed packages and trust fingerprints' \
 	  'make cleanup                 Preview removal of abandoned owned builds' \
-	  'make repo-status             Show the checkout and private promotion state' \
+	  'make repo-status             Show the checkout and worktrees' \
 	  'make cache-stats             Inspect existing interactive compiler caches' \
-	  'make storage-report          Report build storage, with REMOTE=1 for GitHub'
+	  'make storage-report          Report build storage, with REMOTE=1 for GitHub' \
+	  'make patch-report            Validate and list downstream patch provenance'
 
 host-deps:
 	sudo apt-get update
@@ -63,6 +64,7 @@ feeds:
 	cd openwrt && ./scripts/feeds update -a
 	bash scripts/apply-feed-patches.sh
 	cd openwrt && ./scripts/feeds install -a
+	cd openwrt && ./scripts/feeds uninstall qt5base qt6base fwknop luci-app-fwknopd
 
 configure: source
 	$(MAKE) -C openwrt scripts/config/conf prepare-tmpinfo
@@ -94,7 +96,7 @@ save-config: check
 check: source
 	@bash scripts/apply-feed-patches.sh
 	@grep -Eq '^KERNEL_PATCHVER[[:space:]]*:=[[:space:]]*6\.18$$' openwrt/target/linux/qualcommbe/Makefile || { echo 'Expected the qualcommbe Linux 6.18 target.' >&2; exit 1; }
-	@grep -Fqx -e '$(PROFILE)' -e '$(REFLASH_PROFILE)' openwrt/.config || { echo 'Run make configure to select JIDU6111.' >&2; exit 1; }
+	@grep -Fqx -e '$(PROFILE)' -e '$(REFLASH_PROFILE)' -e '$(WCSS_PROFILE)' openwrt/.config || { echo 'Run make configure to select JIDU6111.' >&2; exit 1; }
 
 download: check
 	$(MAKE) -C openwrt -j$(JOBS) download
@@ -129,7 +131,7 @@ package-index: check
 cache-stats:
 	CCACHE_DIR="$(CURDIR)/openwrt/.ccache" ccache --show-stats
 
-.PHONY: build-firmware verify-router release-dev reserve-stable stage-stable promote cleanup storage-report repo-status test-release
+.PHONY: build-firmware verify-router release-beta promote cleanup storage-report repo-status test-release patch-report
 
 export JIDU_OP_COMMIT := $(COMMIT)
 export JIDU_OP_TAG := $(TAG)
@@ -137,7 +139,9 @@ export JIDU_OP_OUTPUT := $(OUTPUT)
 export JIDU_OP_SIGNING_KEY := $(SIGNING_KEY)
 export JIDU_OP_BUILD_PROFILE := $(BUILD_PROFILE)
 export JIDU_OP_ROUTER := $(ROUTER)
-export JIDU_OP_CONSUME := $(CONSUME_DEVELOPMENT)
+export JIDU_OP_BETA := $(BETA)
+export JIDU_OP_EVIDENCE := $(EVIDENCE)
+export JIDU_OP_NOTES := $(NOTES)
 
 build-firmware:
 	@set -eu; set --; if [ -n "$$JIDU_OP_BUILD_PROFILE" ]; then set -- --profile "$$JIDU_OP_BUILD_PROFILE"; fi; \
@@ -148,17 +152,11 @@ verify-router:
 	@ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=10 -- "root@$${JIDU_OP_ROUTER:-192.168.50.1}" \
 	  'ubus call system board && apk --no-cache --repositories-file /dev/null query --from installed --fields name,version --format json kernel nicx-telemetry luci-app-nicx-telemetry && cat /etc/apk/arch && sha256sum /etc/apk/keys/*.pem'
 
-release-dev:
-	@bash scripts/release-operator.sh development
-
-reserve-stable:
-	@bash scripts/release-operator.sh reserve
-
-stage-stable:
-	@bash scripts/release-operator.sh stage
+release-beta:
+	@bash scripts/release-operator.sh beta
 
 promote:
-	@bash scripts/release-operator.sh promote
+	@bash scripts/release-operator.sh stable
 
 cleanup:
 	@python3 -B scripts/release_storage.py cleanup $(if $(filter 1,$(APPLY)),--apply)
@@ -169,7 +167,9 @@ storage-report:
 repo-status:
 	@git status --short --branch
 	@git worktree list
-	@python3 -B scripts/promotion.py status
+
+patch-report:
+	@python3 -B scripts/check_sources.py --report
 
 test-release:
 	@python3 -B -m unittest discover -s scripts/tests -v

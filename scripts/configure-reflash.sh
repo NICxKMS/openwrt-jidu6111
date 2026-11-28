@@ -9,6 +9,20 @@ case "$profile" in
     *) printf 'Unknown build profile %s\n' "$profile" >&2; exit 2;;
 esac
 
+radio=${JIDU6111_RADIO:-both}
+case "$radio" in
+    both) excluded= ;;
+    dual-band) excluded=CONFIG_TARGET_DEVICE_qualcommbe_ipq95xx_DEVICE_jiorouter_ax6000-jidu6111-wcss-off ;;
+    wcss-off) excluded=CONFIG_TARGET_DEVICE_qualcommbe_ipq95xx_DEVICE_jiorouter_ax6000-jidu6111 ;;
+    *) printf 'Unknown radio variant %s\n' "$radio" >&2; exit 2 ;;
+esac
+output="bin-$profile"
+if [[ "$radio" != both ]]; then output="$output-$radio"; fi
+if [[ -d build_dir && -f .config ]] && ! grep -Fqx "CONFIG_BINARY_FOLDER=\"$PWD/$output\"" .config; then
+    printf '%s\n' 'Use a separate worktree for another compiler or radio build with existing intermediates.' >&2
+    exit 1
+fi
+
 monitor_pin=$(awk '$2 == "nicx_monitor" { sub(/^.*\^/, "", $3); print $3 }' ../sources/feeds.conf)
 if [[ ! "$monitor_pin" =~ ^[0-9a-f]{40}$ ]]; then
     printf 'Invalid Nicx Monitor source pin in sources/feeds.conf.\n' >&2
@@ -41,13 +55,14 @@ seed=$(mktemp .config.reflash-seed.XXXXXX)
 resolved=$(mktemp .config.reflash.XXXXXX)
 trap 'rm -f "$seed" "$resolved" "$resolved.old"' EXIT
 
-awk '
+awk -v excluded="$excluded" '
     /^CONFIG_TARGET_qualcommbe_ipq95xx_DEVICE_jiorouter_ax6000-jidu6111=/ { next }
     /^(CONFIG_BINARY_FOLDER=|# CONFIG_BINARY_FOLDER is not set)/ { next }
     /^(CONFIG_|# CONFIG_)/ {
         key = $0
         sub(/^# /, "", key)
         sub(/[= ].*$/, "", key)
+        if (key == excluded) next
         if (!(key in settings)) order[++count] = key
         settings[key] = $0
     }
@@ -60,7 +75,7 @@ fi
 if [[ "$profile" == clang-thinlto ]]; then
     printf '%s\n' 'CONFIG_KERNEL_LTO_CLANG_THIN=y' >> "$seed"
 fi
-printf 'CONFIG_BINARY_FOLDER="%s/bin-%s"\n' "$PWD" "$profile" >> "$seed"
+printf 'CONFIG_BINARY_FOLDER="%s/%s"\n' "$PWD" "$output" >> "$seed"
 
 ./scripts/config/conf --defconfig="$seed" -w "$resolved" Config.in
 while IFS= read -r setting; do

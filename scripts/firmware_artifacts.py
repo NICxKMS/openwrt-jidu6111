@@ -10,16 +10,19 @@ import os
 import platform
 import re
 import shutil
+import struct
 import subprocess
 import sys
 import tarfile
 import tempfile
+import zlib
 from pathlib import Path
 
 from release_feed import extract_feed
 from release_storage import build_root
 
 BOARD = 'jiorouter,ax6000-jidu6111'
+TARGET = 'qualcommbe/ipq95xx'
 ARCHITECTURE = 'aarch64_cortex-a53'
 DEVICE = 'jiorouter_ax6000-jidu6111'
 RADIOS = {'dual-band': DEVICE, 'wcss-off': f'{DEVICE}-wcss-off'}
@@ -93,9 +96,45 @@ def validate_index(packages, kernel, architecture):
         name = package['name']
         if package.get('arch') not in {architecture, 'noarch', 'all'}:
             raise ValueError(f'Wrong APK architecture for {name}')
-        dependencies = [dep for dep in package.get('depends', []) if dep.startswith('kernel=')]
-        if name.startswith('kmod-') and dependencies != [f'kernel={kernel}']:
+        dependencies = [dep for dep in package.get('depends', [])
+                        if re.match(r'^!?kernel(?:$|[<>=~])', dep)]
+        if (name.startswith('kmod-') or dependencies) and dependencies != [f'kernel={kernel}']:
             raise ValueError(f'Wrong kernel ABI for {name}')
+
+
+def sysupgrade_metadata(path: Path) -> dict:
+    trailer = struct.Struct('>4sIB3xI')
+    with path.open('rb') as image:
+        end = path.stat().st_size
+        for expected_type in (None, 1):
+            if end < trailer.size:
+                raise ValueError(f'Missing sysupgrade metadata in {path.name}')
+            image.seek(end - trailer.size)
+            magic, crc, kind, size = trailer.unpack(image.read(trailer.size))
+            if (magic != b'FWx0' or not trailer.size < size <= end
+                    or kind not in (0, 1) or (expected_type is not None and kind != expected_type)):
+                raise ValueError(f'Invalid sysupgrade trailer in {path.name}')
+            if kind == 0:
+                end -= size
+                continue
+            image.seek(end - size)
+            header = image.read(8)
+            if size <= trailer.size + len(header) or size > 32 * 1024 or header != b'\0' * 8:
+                raise ValueError(f'Invalid sysupgrade metadata header in {path.name}')
+            metadata = json.loads(image.read(size - trailer.size - len(header)))
+            image.seek(0)
+            remaining = end - trailer.size
+            computed = 0
+            while remaining:
+                block = image.read(min(1024 * 1024, remaining))
+                if not block:
+                    raise ValueError(f'Truncated sysupgrade metadata in {path.name}')
+                computed = zlib.crc32(block, computed)
+                remaining -= len(block)
+            if (computed ^ 0xffffffff) != crc:
+                raise ValueError(f'Sysupgrade metadata CRC mismatch in {path.name}')
+            return metadata
+    raise ValueError(f'Missing sysupgrade metadata in {path.name}')
 
 
 def inspect_image(path, temp):
@@ -210,7 +249,7 @@ def monitoring_source(openwrt, installed):
 def collect(args):
     profile = args.profile
     build = args.openwrt / f'bin-{profile}'
-    target = build / 'targets/qualcommbe/ipq95xx'
+    target = build / 'targets' / TARGET
     profiles = json.loads((target / 'profiles.json').read_text(encoding='utf-8'))
     apk = args.openwrt / 'staging_dir/host/bin/apk'
     images = []
@@ -225,7 +264,9 @@ def collect(args):
             raise ValueError(f'OpenWrt image checksum differs for {original.name}')
         filename = f'jidu6111-{profile}-{radio}-sysupgrade.bin'
         shutil.copyfile(original, args.output / filename)
-        images.append({'radio': radio, 'file': filename, 'hardware_verified': False})
+        images.append({'radio': radio, 'file': filename, 'type': 'sysupgrade',
+                       'hardware_verification': 'not-tested', 'known_issues': [],
+                       'wcss_reservation_reduction_bytes': 43 * 1024 * 1024 if radio == 'wcss-off' else 0})
     feed = f'jidu6111-{profile}-feed.tar.gz'
     pack_feed(build / 'repository', args.output / feed)
     identity, installed = check_profile(apk, args.output, images, feed, check_installed=True)
@@ -241,6 +282,21 @@ def collect(args):
         return (text.replace(f'file://{args.openwrt.parent}', 'https://github.com/NICxKMS/openwrt-jidu6111.git')
                 .replace(str(args.openwrt), '${OPENWRT_DIR}'))
 
+    configuration = portable((args.openwrt / '.config').read_text(encoding='utf-8'))
+    config_sha256 = hashlib.sha256(configuration.encode()).hexdigest()
+    kernel_configs = list(args.openwrt.glob('build_dir/target-*/linux-qualcommbe_ipq95xx/linux-*/.config'))
+    if len(kernel_configs) != 1:
+        raise ValueError('Expected one resolved qualcommbe/ipq95xx kernel configuration')
+    kernel_config = kernel_configs[0]
+    abi = (kernel_config.parent / '.vermagic').read_text().strip()
+    if abi != identity['kernel'].split('~')[1].rsplit('-r', 1)[0]:
+        raise ValueError('Resolved kernel ABI differs from the image kernel package')
+    kernel_version = profiles['linux_kernel']['version']
+    kernel_source = safe_file(args.openwrt / 'dl', f'linux-{kernel_version}.tar.xz')
+    patch_hashes = {
+        str(path.relative_to(args.openwrt.parent)): sha256(path)
+        for path in sorted((args.openwrt.parent / 'sources').rglob('*.patch'))
+    }
     output_json(args.output / buildinfo, {
         'source_commit': args.commit,
         'openwrt_commit': command('git', '-C', args.openwrt, 'rev-parse', 'HEAD', text=True).strip(),
@@ -249,15 +305,20 @@ def collect(args):
                            if path.is_dir() and (path / '.git').exists()},
         'buildinfo': {name: portable((target / name).read_text(encoding='utf-8'))
                       for name in ('config.buildinfo', 'version.buildinfo', 'feeds.buildinfo')},
-        'resolved_config': portable((args.openwrt / '.config').read_text(encoding='utf-8')),
+        'resolved_config': configuration,
+        'resolved_kernel_config': portable(kernel_config.read_text(encoding='utf-8')),
+        'patch_sha256': patch_hashes,
         'kernel': profiles['linux_kernel'],
+        'kernel_source_sha256': sha256(kernel_source),
         'installed_packages': installed,
         'tool_versions': tool_versions,
-        'build_host': {'system': platform.system(), 'machine': platform.machine()},
+        'build_host': {'system': platform.system(), 'machine': platform.machine(),
+                       'distribution': platform.freedesktop_os_release()['PRETTY_NAME']},
         'verification': 'build-verified',
     })
-    output_json(args.profile_record, {'id': profile, 'board': BOARD, 'feed': feed,
+    output_json(args.profile_record, {'id': profile, 'board': BOARD, 'target': TARGET, 'feed': feed,
                                       'images': images, 'buildinfo': buildinfo,
+                                      'config_sha256': config_sha256, 'kernel_abi': abi,
                                       'monitoring': monitoring_source(args.openwrt, installed), **identity})
 
 
@@ -334,7 +395,20 @@ def verify(args):
         for asset in [profile['feed'], *(image['file'] for image in profile['images'])]:
             if asset not in document['assets']:
                 raise ValueError(f'Missing manifest entry for {asset}')
-        identity, _ = check_profile(args.apk, args.directory, profile['images'], profile['feed'])
+        official = profile['id'] in BUILD_PROFILES
+        identity, installed = check_profile(args.apk, args.directory, profile['images'], profile['feed'],
+                                            check_installed=official)
+        if official:
+            for image in profile['images']:
+                metadata = sysupgrade_metadata(args.directory / image['file'])
+                version = metadata['version']
+                if (metadata['supported_devices'] != [BOARD] or version['target'] != TARGET
+                        or version['revision'] != identity['firmware_revision']):
+                    raise ValueError(f'Sysupgrade metadata does not match {image["file"]}')
+                packages = installed[image['radio']]
+                expected = {name: packages[name][0] for name in MONITOR_PACKAGES}
+                if profile['monitoring']['packages'][image['radio']] != expected:
+                    raise ValueError(f'Bundled package metadata differs from {image["file"]}')
         if any(profile.get(field) != value for field, value in identity.items()):
             raise ValueError(f'Manifest identity mismatch for {profile["id"]}')
         print(f'Verified {profile["id"]} firmware and APK feed for {identity["kernel"]}.')

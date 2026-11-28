@@ -50,6 +50,17 @@ class FirmwareArtifactTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'kernel ABI'):
             validate_index(index, '6.18.65~abcdef-r1', arch)
 
+    def test_index_rejects_kernel_dependency_from_userspace_on_a_different_abi(self):
+        arch = 'aarch64_cortex-a53'
+        kernel = '6.18.65~abcdef-r1'
+        index = [
+            {'name': 'kernel', 'version': kernel, 'arch': arch},
+            {'name': 'diagnostics', 'version': '1.0-r1', 'arch': arch,
+             'depends': ['kernel=6.18.65~fedcba-r1']},
+        ]
+        with self.assertRaisesRegex(ValueError, 'kernel ABI'):
+            validate_index(index, kernel, arch)
+
     def test_index_accepts_compatible_modules_and_noarch_packages(self):
         arch = 'aarch64_cortex-a53'
         kernel = '6.18.65~abcdef-r1'

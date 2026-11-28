@@ -2,8 +2,13 @@ name: Firmware repository checks
 on:
   pull_request:
   push:
-    branches: [main, development, stable]
-  workflow_call:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      patch_apply:
+        description: Prepare patched kernel and networking package sources
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -16,6 +21,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       feed: ${{ steps.paths.outputs.feed }}
+      patches: ${{ steps.paths.outputs.patches }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -29,15 +35,19 @@ jobs:
           if [[ "$EVENT" == workflow_dispatch ]] || ! git cat-file -e "$BASE^{commit}" 2>/dev/null; then
             echo 'feed=true' >> "$GITHUB_OUTPUT"
           else
-            git diff --name-only "$BASE" HEAD > "$RUNNER_TEMP/changed-files"
-            if grep -Eq '^(Makefile$|config/|sources/|scripts/(apply-feed-patches|bootstrap-source|build-firmware|configure-reflash|firmware_artifacts)[.]|[.]github/workflows/firmware-checks[.]yml$)' "$RUNNER_TEMP/changed-files"; then
+            changed="$RUNNER_TEMP/changed-files"
+            git diff --name-only "$BASE" HEAD -- . ':(exclude)*.md' > "$changed"
+            if grep -Eq '^(Makefile$|config/|sources/|scripts/(apply-feed-patches|bootstrap-source|build-firmware|configure-reflash|firmware_artifacts)[.]|[.]github/workflows/firmware-checks[.]yml$)' "$changed"; then
               echo 'feed=true' >> "$GITHUB_OUTPUT"
             fi
+            if grep -Eq '^sources/(openwrt[.](commit|patch)|openwrt/.*[.]patch)$' "$changed"; then
+              echo 'patches=true' >> "$GITHUB_OUTPUT"
+            fi
           fi
-      - run: |
+          python3 -B scripts/check_sources.py
           python3 -B -m unittest discover -s scripts/tests -v
           for script in scripts/*.sh; do bash -n "$script"; done
-          git diff --check HEAD^ HEAD
+          if git cat-file -e "$BASE^{commit}" 2>/dev/null; then git diff --check "$BASE" HEAD; fi
 
   verify-feed:
     needs: scope
@@ -47,17 +57,17 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-      - name: Verify the pinned monitoring package metadata
+      - name: Prepare immutable sources and verify both compiler configurations
         run: |
-          make source
-          cd openwrt
-          # The LuCI monitoring recipe imports the pinned LuCI feed's luci.mk.
-          ./scripts/feeds update luci nicx_monitor
-          pin=$(awk '$2 == "nicx_monitor" { sub(/^.*\^/, "", $3); print $3 }' feeds.conf)
-          [[ "$pin" =~ ^[0-9a-f]{40}$ ]]
-          test "$(git -C feeds/nicx_monitor rev-parse HEAD)" = "$pin"
-          grep -Fqx 'Package: nicx-telemetry' feeds/nicx_monitor.index
-          grep -Fqx 'Package: luci-app-nicx-telemetry' feeds/nicx_monitor.index
+          sudo apt-get update
+          sudo apt-get install -y build-essential flex bison bc gawk gettext libelf-dev libncurses-dev \
+            libssl-dev python3-dev python3-setuptools rsync unzip zstd
+          make source feeds configure-clang-thinlto configure-gcc-kernel
+          grep -Fqx 'Package: nicx-telemetry' openwrt/feeds/nicx_monitor.index
+          grep -Fqx 'Package: luci-app-nicx-telemetry' openwrt/feeds/nicx_monitor.index
+      - if: inputs.patch_apply || needs.scope.outputs.patches == 'true'
+        name: Apply kernel and networking package patches
+        run: make -C openwrt target/linux/prepare package/kernel/mac80211/prepare package/network/services/hostapd/prepare
 
   required:
     name: Required repository checks

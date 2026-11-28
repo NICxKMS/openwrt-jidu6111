@@ -6,6 +6,6 @@ Describe the concrete problem and resulting behavior.
 
 List relevant passing checks. Distinguish local fixtures from hosted or physical-router evidence.
 
-## Deployment and compatibility
+## Firmware compatibility
 
-Mention migrations, OpenWrt package releases, configuration changes and any remaining limitations. Confirm that no secrets or private telemetry are included.
+Describe changes to image compatibility, signed packages, recovery and test coverage. For a task branch, record its purpose, prerequisites and when it can be retired.

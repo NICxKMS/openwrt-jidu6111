@@ -11,7 +11,8 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from release_feed import PENDING, RouterIdentity, SelectedFeed, channel_release, download_feed, extract_feed, select_feed
+from release_workflow import PENDING
+from release_feed import RouterIdentity, SelectedFeed, channel_release, download_feed, extract_feed, select_feed
 
 
 BOARD = "jiorouter,ax6000-jidu6111"
@@ -20,14 +21,14 @@ KERNEL = "6.18.60~matching-r1"
 ARCH = "aarch64_cortex-a53"
 MANIFEST = "release-manifest.json"
 STABLE = "v1.0.0"
-DEVELOPMENT = "v1.0.1-dev.4.1"
+BETA = "v1.0.1-beta.4"
 
 
 def release(tag, *, prerelease=False, managed=True):
     return {
         "tag_name": tag,
         "draft": False,
-        "prerelease": prerelease,
+        "prerelease": prerelease, "immutable": True,
         "published_at": "2026-11-27T00:00:00Z",
         "body": "<!-- jidu6111-managed -->" if managed else "",
         "assets": [{"name": MANIFEST}, {"name": "feed.tar.gz"}],
@@ -56,18 +57,18 @@ class SelectionTests(unittest.TestCase):
         self.router = RouterIdentity(BOARD, ARCH, KERNEL, frozenset({KEY}))
 
     @patch("release_feed.read_json")
-    def test_development_skips_pending_and_unmanaged_releases(self, read):
-        newest = release("v1.0.1-dev.5.1", prerelease=True)
+    def test_beta_skips_pending_and_unmanaged_releases(self, read):
+        newest = release("v1.0.1-beta.5", prerelease=True)
         newest["published_at"] = "2026-11-27T01:00:00Z"
-        newest["body"] += PENDING
-        unmanaged = release("v1.0.1-dev.6.1", prerelease=True, managed=False)
-        read.return_value = [newest, unmanaged, release(DEVELOPMENT, prerelease=True)]
-        self.assertEqual(channel_release("development")["tag_name"], DEVELOPMENT)
+        newest["body"] += "\n" + PENDING
+        unmanaged = release("v1.0.1-beta.6", prerelease=True, managed=False)
+        read.return_value = [newest, unmanaged, release("v1.0.1-beta.3", prerelease=True), release(BETA, prerelease=True)]
+        self.assertEqual(channel_release("beta")["tag_name"], BETA)
 
     @patch("release_feed.release_manifest")
     @patch("release_feed.channel_release")
-    def test_auto_prefers_stable_and_does_not_fetch_development_manifest(self, channel, read):
-        channel.side_effect = [release(STABLE), release(DEVELOPMENT, prerelease=True)]
+    def test_auto_prefers_stable_and_does_not_fetch_beta_manifest(self, channel, read):
+        channel.side_effect = [release(STABLE), release(BETA, prerelease=True)]
         read.return_value = manifest()
         result = select_feed(self.router)
         self.assertEqual((result.channel, result.tag, result.profile), ("stable", STABLE, "gcc-kernel"))
@@ -76,11 +77,11 @@ class SelectionTests(unittest.TestCase):
 
     @patch("release_feed.release_manifest")
     @patch("release_feed.channel_release")
-    def test_auto_uses_development_only_when_stable_does_not_match(self, channel, read):
-        channel.side_effect = [release(STABLE), release(DEVELOPMENT, prerelease=True)]
+    def test_auto_uses_beta_only_when_stable_does_not_match(self, channel, read):
+        channel.side_effect = [release(STABLE), release(BETA, prerelease=True)]
         read.side_effect = [manifest(kernel="6.18.60~different-r1"), manifest()]
         result = select_feed(self.router)
-        self.assertEqual(result.channel, "development")
+        self.assertEqual(result.channel, "beta")
 
     @patch("release_feed.release_manifest")
     @patch("release_feed.channel_release")

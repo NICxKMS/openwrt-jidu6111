@@ -26,7 +26,7 @@ NUMBER = r"(?:0|[1-9][0-9]*)"
 VERSION = rf"v{NUMBER}\.{NUMBER}\.{NUMBER}"
 TAGS = {
     "stable": re.compile(VERSION),
-    "development": re.compile(rf"{VERSION}-dev\.{NUMBER}\.{NUMBER}"),
+    "beta": re.compile(rf"{VERSION}-beta\.[1-9][0-9]*"),
 }
 
 
@@ -105,7 +105,7 @@ def verify_local(directory, commit, *, check_feeds=True):
 
 def channel_of(entry):
     body = (entry.get("body") or "").splitlines()
-    channel = "development" if entry.get("prerelease") else "stable"
+    channel = "beta" if entry.get("prerelease") else "stable"
     if MANAGED in body and TAGS[channel].fullmatch(entry.get("tag_name", "")):
         return channel
     return None
@@ -115,8 +115,18 @@ def is_pending(entry):
     return entry["draft"] or PENDING in (entry.get("body") or "").splitlines()
 
 
-def published_on(entry):
-    return (entry.get("published_at") or "", entry["id"])
+def version_key(tag: str) -> tuple[int, ...]:
+    return tuple(map(int, re.findall(r"[0-9]+", tag)))
+
+
+def eligible(entry, channel: str) -> bool:
+    return channel_of(entry) == channel and entry.get("immutable") is True and not is_pending(entry)
+
+
+def should_mark_latest(entries, channel: str, tag: str) -> bool:
+    return channel == "stable" and all(
+        version_key(entry["tag_name"]) <= version_key(tag) for entry in entries if eligible(entry, "stable")
+    )
 
 
 def json_pages(output):
@@ -153,9 +163,6 @@ class GitHub:
     def releases(self):
         return [release for page in self.api("releases?per_page=100", paginate=True) for release in page]
 
-    def branch_head(self, branch):
-        return self.api(f"git/ref/heads/{branch}")["object"]["sha"]
-
     def tag_commit(self, tag, *, missing_ok=False):
         try:
             target = self.api(f"git/ref/tags/{tag}")["object"]
@@ -172,34 +179,21 @@ class GitHub:
     def patch(self, entry, **data):
         return self.api(f"releases/{entry['id']}", data=data, method="PATCH")
 
-    def delete(self, entry):
-        self.api(f"releases/{entry['id']}", method="DELETE")
-
     def create(self, channel, tag, commit, notes):
         body = f"{MANAGED}\n{PENDING}\n\n{notes.strip()}"
-        label = "Development" if channel == "development" else "Stable"
+        label = "Beta" if channel == "beta" else "Stable"
         return self.api("releases", method="POST", data={
             "tag_name": tag, "target_commitish": commit, "draft": True,
-            "prerelease": channel == "development", "name": f"JIDU6111 {label} {tag}",
+            "prerelease": channel == "beta", "name": f"JIDU6111 {label} {tag}",
             "body": body, "make_latest": "false",
         })
 
     def upload(self, tag, path):
         subprocess.run(["gh", "release", "upload", tag, str(path), "--repo", self.repo], check=True)
 
-    def download(self, entry, directory):
+    def download(self, entry, directory, pattern="*"):
         subprocess.run(["gh", "release", "download", entry["tag_name"], "--repo", self.repo,
-                        "--dir", str(directory), "--pattern", "*"], check=True)
-
-    def verify_draft(self, entry, commit, approved_digest=None):
-        with tempfile.TemporaryDirectory(prefix="jidu6111-release-") as temporary:
-            directory = pathlib.Path(temporary)
-            self.download(entry, directory)
-            manifest = verify_local(directory, commit)
-            if approved_digest and digest(directory / MANIFEST) != approved_digest:
-                raise ValueError("The staged manifest differs from the approved checksum")
-            return {name: {"size": (directory / name).stat().st_size, "sha256": digest(directory / name)}
-                    for name in (MANIFEST, *manifest["assets"])}
+                        "--dir", str(directory), "--pattern", pattern], check=True, stdout=sys.stderr)
 
     def verify_public(self, entry, assets):
         tag = entry["tag_name"]
@@ -220,30 +214,6 @@ class GitHub:
                 if path.stat().st_size != expected["size"] or digest(path) != expected["sha256"]:
                     raise ValueError(f"Public asset checksum mismatch: {name}")
 
-    def verify_discovery(self, entry, channel):
-        suffix = "latest" if channel == "stable" else "?per_page=100"
-        separator = "/" if channel == "stable" else ""
-        url = f"https://api.github.com/{self.base}/releases{separator}{suffix}"
-        headers = {"User-Agent": "JIDU6111-release-verifier", "Cache-Control": "no-cache"}
-        for attempt in range(5):
-            try:
-                with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=30) as remote:
-                    response = json.load(remote)
-                entries = [response] if channel == "stable" else response
-                current = max(
-                    (candidate for candidate in entries if channel_of(candidate) == channel
-                     and not is_pending(candidate)),
-                    key=published_on,
-                    default=None,
-                )
-                if current and current["id"] == entry["id"]:
-                    return
-            except OSError:
-                pass
-            if attempt < 4:
-                time.sleep(2)
-        raise ValueError("GitHub public discovery has not exposed the verified replacement")
-
 
 def get_managed(entries, channel, tag):
     for entry in entries:
@@ -254,164 +224,117 @@ def get_managed(entries, channel, tag):
     return None
 
 
-def guard(github, entries, channel, tag, commit):
-    if github.branch_head(channel) != commit:
-        raise ValueError(f"Candidate does not match the {channel} branch head")
-    reservations = [
-        entry for entry in entries
-        if channel_of(entry) == "stable" and is_pending(entry) and entry["tag_name"] != tag
-    ]
-    if reservations:
-        raise ValueError(f"Stable promotion already reserved by {reservations[0]['tag_name']}")
-
-
-def stage(github, channel, tag, commit, directory, notes):
-    entries = github.releases()
-    guard(github, entries, channel, tag, commit)
-    entry = get_managed(entries, channel, tag)
-    if entry and (not entry["draft"] or not is_pending(entry) or entry["target_commitish"] != commit):
-        raise ValueError("Choose a new release tag for different or already published content")
-    manifest = verify_local(directory, commit) if directory else None
-    if not entry:
-        if channel == "stable" and directory:
-            raise ValueError("Reserve the Stable draft with the serialized workflow before staging")
-        if github.tag_commit(tag, missing_ok=True):
-            raise ValueError("This version tag already exists")
+def stage(github, channel: str, tag: str, commit: str, directory: pathlib.Path, notes: str) -> None:
+    manifest = verify_local(directory, commit)
+    if github.api("immutable-releases").get("enabled") is not True:
+        raise ValueError("Enable immutable GitHub releases before staging")
+    entry = get_managed(github.releases(), channel, tag)
+    if entry and (not entry["draft"] or entry["target_commitish"] != commit):
+        raise ValueError("Choose a new tag for different or published content")
+    tagged_commit = github.tag_commit(tag, missing_ok=True)
+    if tagged_commit is not None and (entry is None or tagged_commit != commit):
+        raise ValueError("This version tag already exists")
+    if entry is None:
         entry = github.create(channel, tag, commit, notes)
-    if manifest is not None:
-        uploaded = {asset["name"]: asset for asset in entry["assets"]}
-        expected = set(manifest["assets"]) | {MANIFEST}
-        if uploaded.keys() - expected:
-            raise ValueError("The draft already contains assets outside the candidate")
-        for name in [*sorted(manifest["assets"]), MANIFEST]:
-            path = directory / name
-            if name not in uploaded:
-                github.upload(tag, path)
-                continue
-            asset = uploaded[name]
-            if asset["size"] != path.stat().st_size or asset.get("digest") != f"sha256:{digest(path)}":
-                raise ValueError(f"Draft asset differs from the candidate: {name}")
+    uploaded = {asset["name"]: asset for asset in entry["assets"]}
+    names = [*sorted(manifest["assets"]), MANIFEST]
+    if uploaded.keys() - set(names):
+        raise ValueError("The draft already contains undeclared assets")
+    for name in names:
+        path = directory / name
+        if name not in uploaded:
+            github.upload(tag, path)
+        elif uploaded[name].get("digest") != f"sha256:{digest(path)}":
+            raise ValueError(f"Draft asset differs from the candidate: {name}")
+    if tagged_commit is None:
+        github.api("git/refs", method="POST", data={"ref": f"refs/tags/{tag}", "sha": commit})
 
 
-def guard_development_order(entries, target):
-    if channel_of(target) != "development":
-        return
-    if any(channel_of(entry) == "development" and not is_pending(entry)
-           and entry["id"] > target["id"] for entry in entries):
-        raise ValueError("A newer candidate has already been verified")
+def asset_receipt(entry) -> str:
+    assets = {}
+    for asset in entry["assets"]:
+        name = checked_file(asset["name"])
+        sha256 = asset.get("digest") or ""
+        if (name in assets or asset["state"] != "uploaded" or asset["size"] <= 0
+                or not sha256.startswith("sha256:") or not HEX64.fullmatch(sha256[7:])):
+            raise ValueError("GitHub draft asset is incomplete")
+        assets[name] = (asset["id"], asset["size"], sha256)
+    if MANIFEST not in assets:
+        raise ValueError("Missing GitHub manifest asset")
+    payload = json.dumps([entry["id"], entry["target_commitish"], assets], sort_keys=True)
+    return hashlib.sha256(payload.encode()).hexdigest()
 
 
-def verify_consumed_development(github, candidate, assets):
-    candidate_commit = github.tag_commit(candidate["tag_name"])
-    previous = github.verify_draft(candidate, candidate_commit)
-    def firmware_assets(files):
-        return {
-            name: info for name, info in files.items()
-            if name.endswith((".bin", ".tar.gz")) and name != "monitor-bundle.tar.gz"
-        }
-
-    expected = firmware_assets(previous)
-    if not expected or firmware_assets(assets) != expected:
-        raise ValueError("The consumed Development firmware and feed must match Stable exactly")
+def match_download(entry, directory: pathlib.Path, manifest: dict) -> str:
+    receipt = asset_receipt(entry)
+    wanted = {MANIFEST: {"size": (directory / MANIFEST).stat().st_size, "sha256": digest(directory / MANIFEST)},
+              **manifest["assets"]}
+    actual = {asset["name"]: {"size": asset["size"], "sha256": asset["digest"][7:]} for asset in entry["assets"]}
+    if wanted != actual:
+        raise ValueError("Downloaded files differ from the GitHub asset digests")
+    return receipt
 
 
-def publish(github, channel, tag, commit, approved_digest=None, consumed_tag=None):
+def publish(github, channel: str, tag: str, commit: str, receipt: str) -> None:
     entries = github.releases()
-    guard(github, entries, channel, tag, commit)
     target = get_managed(entries, channel, tag)
-    if not target or target["target_commitish"] != commit:
-        raise ValueError(f"No managed {channel} release staged at {commit}")
-    guard_development_order(entries, target)
-    candidate = None
-    if consumed_tag is not None:
-        candidate = get_managed(entries, "development", consumed_tag)
-        if channel != "stable" or (candidate and is_pending(candidate)) or (not candidate and is_pending(target)):
-            raise ValueError("The consumed tag must be the verified Development release")
-    if not target["draft"] and github.tag_commit(tag) != commit:
-        raise ValueError("Published tag does not match the verified source commit")
-    if is_pending(target):
-        assets = github.verify_draft(target, commit, approved_digest) if approved_digest else github.verify_draft(target, commit)
-        if candidate:
-            verify_consumed_development(github, candidate, assets)
-        current = github.releases()
-        guard(github, current, channel, tag, commit)
-        guard_development_order(current, target)
-        if target["draft"]:
-            if github.tag_commit(tag, missing_ok=True) not in (None, commit):
-                raise ValueError("Existing version tag points to another commit")
-            target = github.patch(target, draft=False, make_latest="false")
-            if github.tag_commit(tag) != commit:
-                raise ValueError("GitHub assigned an unexpected release tag target")
-        if target.get("immutable") is not True:
-            raise ValueError("Enable immutable GitHub releases before publishing managed assets")
-        github.verify_public(target, assets)
-        current = github.releases()
-        guard(github, current, channel, tag, commit)
-        guard_development_order(current, target)
-        body = "\n".join(line for line in (target.get("body") or "").splitlines() if line != PENDING)
-        target = github.patch(target, body=body, make_latest="true" if channel == "stable" else "false")
-    elif approved_digest:
-        assets = github.verify_draft(target, commit, approved_digest)
-        if candidate:
-            verify_consumed_development(github, candidate, assets)
-    github.verify_discovery(target, channel)
-    for entry in entries:
-        if entry["id"] == target["id"]:
-            continue
-        previous = channel_of(entry) == channel
-        if previous and (entry["id"] > target["id"] or
-                         (not is_pending(entry) and published_on(entry) > published_on(target))):
-            continue
-        if previous or (candidate and entry["id"] == candidate["id"]):
-            if channel == "development":
-                guard(github, github.releases(), channel, tag, commit)
-            github.delete(entry)
+    if not target or target["target_commitish"] != commit or asset_receipt(target) != receipt:
+        raise ValueError("Release changed after independent artifact verification")
+    if github.tag_commit(tag, missing_ok=True) != commit:
+        raise ValueError("Release tag differs from the verified source")
+    if target["draft"]:
+        target = github.patch(target, draft=False, make_latest="false")
+    if asset_receipt(target) != receipt:
+        raise ValueError("Published assets differ from the independently verified draft")
+    if target.get("immutable") is not True or github.tag_commit(tag) != commit:
+        raise ValueError("GitHub release is not immutable at the verified commit")
+    if not is_pending(target):
+        return
+    assets = {asset["name"]: {"size": asset["size"], "sha256": asset["digest"][7:]} for asset in target["assets"]}
+    github.verify_public(target, assets)
+    body = "\n".join(line for line in (target.get("body") or "").splitlines() if line != PENDING)
+    github.patch(target, body=body, make_latest="true" if should_mark_latest(entries, channel, tag) else "false")
 
 
-def main():
+def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", default=REPO)
-    parser.add_argument("operation", choices=("reserve", "stage", "fetch", "publish"))
+    parser.add_argument("operation", choices=("stage", "fetch", "publish"))
     parser.add_argument("--channel", choices=TAGS, required=True)
     parser.add_argument("--tag", required=True)
     parser.add_argument("--commit", required=True)
     parser.add_argument("--directory", type=pathlib.Path)
-    parser.add_argument("--manifest-sha256")
-    parser.add_argument("--consume-development")
+    parser.add_argument("--receipt")
     parser.add_argument("--notes-file", type=pathlib.Path)
     args = parser.parse_args()
     if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", args.repo):
         parser.error("Repository must be owner/name")
     if not TAGS[args.channel].fullmatch(args.tag) or not HEX40.fullmatch(args.commit):
-        parser.error("Use an exact source SHA and a versioned stable or development tag")
-    if args.manifest_sha256 and not HEX64.fullmatch(args.manifest_sha256):
-        parser.error("Use a SHA-256 manifest digest")
+        parser.error("Use an exact source SHA and a versioned Stable or Beta tag")
     if args.operation in {"stage", "fetch"} and args.directory is None:
         parser.error("--directory is required")
-    if args.operation == "reserve" and (args.channel != "stable" or args.directory is not None):
-        parser.error("Reserve creates a Stable draft without assets")
-    if args.operation == "publish" and not args.manifest_sha256:
-        parser.error("Publication requires the SHA-256 from the verified draft")
+    if args.operation == "publish" and not HEX64.fullmatch(args.receipt or ""):
+        parser.error("Publication requires the receipt from independent verification")
 
     github = GitHub(args.repo)
     try:
-        if args.operation in {"reserve", "stage"}:
+        if args.operation == "stage":
             notes = args.notes_file.read_text() if args.notes_file else (
-                "Firmware and signed package feeds. See the release manifest for exact compatibility."
+                "Firmware and matching signed APK feeds. See the manifest and repository documentation."
             )
             stage(github, args.channel, args.tag, args.commit, args.directory, notes)
         elif args.operation == "fetch":
             entry = get_managed(github.releases(), args.channel, args.tag)
             if not entry or entry["target_commitish"] != args.commit:
-                raise ValueError("No managed release staged at the requested commit")
+                raise ValueError("No managed release for the requested commit")
             github.download(entry, args.directory)
-            verify_local(args.directory, args.commit)
+            print(match_download(entry, args.directory, verify_local(args.directory, args.commit)))
         else:
-            publish(github, args.channel, args.tag, args.commit, args.manifest_sha256, args.consume_development)
+            publish(github, args.channel, args.tag, args.commit, args.receipt)
     except subprocess.CalledProcessError as error:
         print(error.stderr or str(error), file=sys.stderr)
         return 1
-    except (ValueError, OSError, tarfile.TarError) as error:
+    except (ValueError, OSError, KeyError, TypeError, tarfile.TarError) as error:
         print(error, file=sys.stderr)
         return 1
     return 0

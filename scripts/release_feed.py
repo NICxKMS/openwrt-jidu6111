@@ -5,17 +5,16 @@ import hashlib
 import json
 import re
 import shutil
+
 import tarfile
 from urllib.error import HTTPError
 from urllib.parse import quote, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 
-REPO = "NICxKMS/openwrt-jidu6111"
-MANIFEST = "release-manifest.json"
-MANAGED = "<!-- jidu6111-managed -->"
-PENDING = "<!-- jidu6111-publication-pending -->"
-VERSION = r"v[0-9]+\.[0-9]+\.[0-9]+"
+from release_workflow import MANIFEST, REPO, eligible, version_key
+
+
 SHA256 = re.compile(r"[0-9a-f]{64}")
 APK_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._+~@-]*\.apk")
 FEED_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._+-]*\.tar\.gz")
@@ -73,20 +72,7 @@ def asset_url(tag, filename):
     return f"https://github.com/{REPO}/releases/download/{quote(tag, safe='')}/{quote(filename, safe='')}"
 
 
-def managed_release(release, *, development):
-    if not isinstance(release, dict) or not isinstance(release.get("published_at"), str):
-        return False
-    body = release.get("body") or ""
-    tag = release.get("tag_name") or ""
-    pattern = VERSION + (r"-dev\.[0-9]+\.[0-9]+" if development else "")
-    return (
-        isinstance(body, str) and MANAGED in body and PENDING not in body
-        and isinstance(tag, str) and re.fullmatch(pattern, tag) is not None
-        and release.get("draft") is False and release.get("prerelease") is development
-    )
-
-
-def channel_release(channel):
+def channel_release(channel: str):
     api = f"https://api.github.com/repos/{REPO}/releases"
     if channel == "stable":
         try:
@@ -95,16 +81,20 @@ def channel_release(channel):
             if error.code != 404:
                 raise
             return None
-        return release if managed_release(release, development=False) else None
+        return release if eligible(release, "stable") else None
 
-    releases = read_json(f"{api}?per_page=100")
-    if not isinstance(releases, list):
-        raise RuntimeError("GitHub returned an invalid release list.")
-    return max(
-        (release for release in releases if managed_release(release, development=True)),
-        key=lambda release: (release.get("published_at") or "", release["tag_name"]),
-        default=None,
-    )
+    best = None
+    for page in range(1, 101):
+        suffix = "" if page == 1 else f"&page={page}"
+        releases = read_json(f"{api}?per_page=100{suffix}")
+        if not isinstance(releases, list):
+            raise RuntimeError("GitHub returned an invalid release list.")
+        for release in releases:
+            if eligible(release, "beta") and (best is None or version_key(release["tag_name"]) > version_key(best["tag_name"])):
+                best = release
+        if len(releases) < 100:
+            return best
+    raise RuntimeError("Release history exceeds the discovery limit")
 
 
 def release_manifest(release):
@@ -124,7 +114,7 @@ def release_manifest(release):
 
 
 def select_feed(router, channel="auto", profile=None):
-    channels = ("stable", "development") if channel == "auto" else (channel,)
+    channels = ("stable", "beta") if channel == "auto" else (channel,)
     for current in channels:
         release = channel_release(current)
         if release is None:
@@ -162,7 +152,7 @@ def select_feed(router, channel="auto", profile=None):
         return SelectedFeed(current, release["tag_name"], entry["id"], filename, size, digest)
 
     raise RuntimeError(
-        f"No compatible {'Stable or Development' if channel == 'auto' else channel.title()} feed was found "
+        f"No compatible {'Stable or Beta' if channel == 'auto' else channel.title()} feed was found "
         "for this router's board, full kernel package version, architecture and signing key. "
         "Use --feed with a matching local repository if you have one."
     )

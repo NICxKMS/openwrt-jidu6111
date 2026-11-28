@@ -16,7 +16,11 @@ for patch in "$project"/sources/feeds/*.patch; do
     if git -C "$checkout" apply --check "$patch" 2>/dev/null; then
         git -C "$checkout" apply --whitespace=nowarn "$patch"
         printf 'Applied local patches to feed %s.\n' "$feed"
-    elif ! git -C "$checkout" apply --reverse --check "$patch" 2>/dev/null; then
+    elif git -C "$checkout" apply --reverse --check "$patch" 2>/dev/null; then
+        if git -C "$checkout" diff --quiet HEAD; then
+            printf 'Feed %s already contains this patch at its pin. Review %s for retirement.\n' "$feed" "$patch" >&2
+        fi
+    else
         printf 'Local patch conflicts with feed %s. Review %s before building.\n' "$feed" "$patch" >&2
         exit 1
     fi

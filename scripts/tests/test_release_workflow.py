@@ -14,80 +14,40 @@ import release_workflow as release
 COMMIT = "a" * 40
 
 
-def entry(tag, *, draft=False, pending=False, prerelease=True, release_id=1):
-    return {
-        "tag_name": tag, "id": release_id, "target_commitish": COMMIT,
-        "draft": draft, "prerelease": prerelease, "assets": [],
-        "body": release.MANAGED + (f"\n{release.PENDING}" if pending else ""),
-    }
-
-
 class PublicationTests(unittest.TestCase):
     def setUp(self):
         self.github = Mock()
-        self.github.branch_head.return_value = COMMIT
+        self.tag = "v1.1.0-beta.2"
+        self.draft = {
+            "tag_name": self.tag, "id": 2, "target_commitish": COMMIT,
+            "draft": True, "prerelease": True,
+            "assets": [{"name": release.MANIFEST, "state": "uploaded", "size": 123,
+                        "digest": "sha256:" + "b" * 64, "id": 47}],
+            "body": f"{release.MANAGED}\n{release.PENDING}",
+        }
+        self.old = {**self.draft, "id": 1, "tag_name": "v1.1.0-beta.1", "draft": False,
+                    "body": release.MANAGED, "immutable": True}
+        self.receipt = release.asset_receipt(self.draft)
+        self.github.releases.return_value = [self.draft, self.old]
         self.github.tag_commit.return_value = COMMIT
-        self.old = entry("v1.1.0-dev.1.1")
-        self.new = entry("v1.1.0-dev.2.1", draft=True, pending=True, release_id=2)
-        self.github.releases.return_value = [self.new, self.old]
+        self.github.patch.return_value = {**self.draft, "draft": False, "immutable": True}
 
-    def test_keeps_previous_when_upload_is_invalid(self):
-        self.github.verify_draft.side_effect = ValueError("bad checksum")
-        with self.assertRaisesRegex(ValueError, "bad checksum"):
-            release.publish(self.github, "development", self.new["tag_name"], COMMIT)
+    def test_asset_replaced_after_verification_blocks_publication(self):
+        self.draft["assets"][0]["id"] = 51
+        with self.assertRaisesRegex(ValueError, "changed after"):
+            release.publish(self.github, "beta", self.tag, COMMIT, self.receipt)
         self.github.patch.assert_not_called()
-        self.github.delete.assert_not_called()
 
-    def test_retires_only_after_public_checks(self):
-        self.github.patch.side_effect = [
-            {**self.new, "draft": False, "immutable": True},
-            {**self.new, "draft": False, "immutable": True, "body": release.MANAGED},
-        ]
-        release.publish(self.github, "development", self.new["tag_name"], COMMIT)
-        calls = [call[0] for call in self.github.mock_calls]
-        self.assertLess(calls.index("verify_public"), calls.index("delete"))
-        self.github.delete.assert_called_once_with(self.old)
-
-    def test_keeps_previous_if_public_download_fails(self):
-        self.github.patch.return_value = {**self.new, "draft": False, "immutable": True}
+    def test_keeps_previous_and_delays_eligibility_until_public_download(self):
         self.github.verify_public.side_effect = ValueError("download failed")
         with self.assertRaisesRegex(ValueError, "download failed"):
-            release.publish(self.github, "development", self.new["tag_name"], COMMIT)
+            release.publish(self.github, "beta", self.tag, COMMIT, self.receipt)
+        self.github.patch.assert_called_once_with(self.draft, draft=False, make_latest="false")
         self.github.delete.assert_not_called()
 
-    def test_blocks_a_stale_commit_and_an_active_stable_promotion(self):
-        self.github.branch_head.return_value = "b" * 40
-        with self.assertRaisesRegex(ValueError, "head"):
-            release.publish(self.github, "development", self.new["tag_name"], COMMIT)
-        self.github.branch_head.return_value = COMMIT
-        reservation = entry("v1.1.0", draft=True, pending=True, prerelease=False)
-        self.github.releases.return_value = [self.new, reservation, self.old]
-        with self.assertRaisesRegex(ValueError, "promotion"):
-            release.publish(self.github, "development", self.new["tag_name"], COMMIT)
-        self.github.patch.assert_not_called()
-
-    def test_retains_previous_until_native_discovery_is_ready(self):
-        self.github.patch.side_effect = [
-            {**self.new, "draft": False, "immutable": True},
-            {**self.new, "draft": False, "immutable": True, "body": release.MANAGED},
-        ]
-        self.github.verify_discovery.side_effect = ValueError("native discovery is stale")
-        with self.assertRaisesRegex(ValueError, "discovery"):
-            release.publish(self.github, "development", self.new["tag_name"], COMMIT)
-        self.github.delete.assert_not_called()
-
-    def test_consumption_rejects_extra_firmware_and_feeds(self):
-        firmware = {"original.bin": {"sha256": "a" * 64}, "feed.tar.gz": {"sha256": "b" * 64}}
-        self.github.verify_draft.return_value = firmware
-        with self.assertRaisesRegex(ValueError, "match Stable"):
-            release.verify_consumed_development(self.github, self.old, {**firmware, "other.bin": {}})
-
-    def test_same_commit_retry_cannot_replace_a_newer_verified_candidate(self):
-        newer = entry("v1.1.0-dev.3.1", release_id=3)
-        self.github.releases.return_value = [newer, self.new, self.old]
-        with self.assertRaisesRegex(ValueError, "newer"):
-            release.publish(self.github, "development", self.new["tag_name"], COMMIT)
-        self.github.patch.assert_not_called()
+    def test_success_makes_new_beta_eligible_and_preserves_previous(self):
+        release.publish(self.github, "beta", self.tag, COMMIT, self.receipt)
+        self.github.patch.assert_called_with(self.github.patch.return_value, body=release.MANAGED, make_latest="false")
         self.github.delete.assert_not_called()
 
 

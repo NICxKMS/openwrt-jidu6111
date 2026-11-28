@@ -51,12 +51,6 @@ reviews:
     - "!**/*.itb"
     - "!**/*.ipk"
     - "!**/*.img"
-    - "!**/node_modules/**"
-    - "!**/dist/**"
-    - "!**/.wrangler/**"
-    - "!**/coverage/**"
-    - "!**/playwright-report/**"
-    - "!**/test-results/**"
     - "!**/__pycache__/**"
     - "!openwrt/build_dir/**"
     - "!openwrt/staging_dir/**"
@@ -73,7 +67,7 @@ reviews:
   merge_risk_instructions: |
     Evaluate consequences, not patch size. Treat potential boot failure, flash
     corruption, ABI incompatibility, OOM, connectivity loss, authorization bypass,
-    credential exposure, data loss, unsafe migrations, quota exhaustion and
+    credential exposure, data loss, unsafe upgrades, storage exhaustion and
     incompatible component upgrades as serious risks. Consider rollback and
     missing verification. Distinguish demonstrated defects from uncertainty.
 

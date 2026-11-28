@@ -75,7 +75,6 @@ scratch=$(realpath -e -- "$scratch")
 [[ $(stat -c %d -- "$scratch") == "$(stat -c %d -- "$output_parent")" ]] \
     || fail 'The build workspace and output must be on the same filesystem.'
 
-JIDU6111_BUILD_ROOT="$scratch" python3 -B "$project/scripts/release_storage.py" cleanup --apply
 workspace=$(mktemp -d "$scratch/build.XXXXXXXX")
 exec {workspace_lock}<"$workspace"
 flock -xn "$workspace_lock"
@@ -86,13 +85,14 @@ trap 'exit 143' TERM
 mkdir -p -- "$workspace/artifacts" "$workspace/tmp" "$workspace/cache" "$workspace/downloads"
 export TMPDIR="$workspace/tmp" XDG_CACHE_HOME="$workspace/cache" CCACHE_DISABLE=1
 export JIDU6111_RELEASE_BUILD=1
+unset JIDU6111_RADIO
 
 source="$workspace/source"
 git clone --quiet --shared --no-checkout "$project" "$source"
 git -C "$source" switch --quiet --detach "$commit"
 [[ -z $(git -C "$source" status --porcelain) ]] || fail 'The selected source checkout is dirty.'
 
-collector="$project/scripts/firmware_artifacts.py"
+collector="$source/scripts/firmware_artifacts.py"
 openwrt="$source/openwrt"
 make -C "$source" source feeds
 # Fetch the pinned OpenWrt source and feeds once. Each compiler gets its own clean copy.
@@ -103,7 +103,11 @@ manifest_args=()
 for current_profile in "${profiles[@]}"; do
     started=$SECONDS
     if [[ -d $workspace/pinned-source ]]; then
-        cp -a --reflink=auto -- "$workspace/pinned-source" "$openwrt"
+        if [[ $current_profile == "${profiles[-1]}" ]]; then
+            mv -- "$workspace/pinned-source" "$openwrt"
+        else
+            cp -a --reflink=auto -- "$workspace/pinned-source" "$openwrt"
+        fi
     fi
     # The directory survives compiler-profile cleanup, and the workspace trap removes it.
     ln -s -- "$workspace/downloads" "$openwrt/dl"
@@ -129,7 +133,9 @@ for current_profile in "${profiles[@]}"; do
         tool_args+=(--tool-version "${tool##*/}" "${version%%$'\n'*}")
     done
     shopt -s nullglob
-    for tool in "$openwrt"/staging_dir/toolchain-*/bin/aarch64-openwrt-linux-musl-{gcc,ld}; do
+    cross_tools=("$openwrt"/staging_dir/toolchain-*/bin/aarch64-openwrt-linux-musl-{gcc,ld})
+    [[ ${#cross_tools[@]} -eq 2 ]] || fail 'Could not identify the OpenWrt cross-compiler and linker.'
+    for tool in "${cross_tools[@]}"; do
         version=$("$tool" --version)
         tool_args+=(--tool-version "${tool##*/}" "${version%%$'\n'*}")
     done
