@@ -10,10 +10,31 @@ from pathlib import Path
 
 SCRIPTS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SCRIPTS))
-from firmware_artifacts import BOARD, check_profile, installed_packages, validate_index, verify
+from firmware_artifacts import BOARD, check_profile, installed_packages, monitoring_source, validate_index, verify
 
 
 class FirmwareArtifactTests(unittest.TestCase):
+    def test_monitor_provenance_rejects_invalid_or_mismatched_pins(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            openwrt = Path(temporary)
+            feed = openwrt / 'feeds/nicx_monitor'
+            feed.mkdir(parents=True)
+            subprocess.run(['git', 'init', '-q', str(feed)], check=True)
+            subprocess.run(['git', '-C', str(feed), '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.test',
+                            'commit', '-qm', 'feed source', '--allow-empty'], check=True)
+            pin = subprocess.check_output(['git', '-C', str(feed), 'rev-parse', 'HEAD'], text=True).strip()
+            source = 'src-git nicx_monitor https://github.com/NICxKMS/openwrt-router-monitor.git^'
+            feeds = openwrt / 'feeds.conf'
+            for config, message in (
+                ('', 'Expected one Git source'),
+                (f'{source}{pin}\n{source}{pin}\n', 'Expected one Git source'),
+                (f'{source}development\n', 'must use a full commit pin'),
+                (f'{source}{"0" * 40}\n', 'differs from its configured pin'),
+            ):
+                with self.subTest(config=config), self.assertRaisesRegex(ValueError, message):
+                    feeds.write_text(config, encoding='utf-8')
+                    monitoring_source(openwrt, {})
+
     def test_installed_kernel_identity_preserves_complete_abi(self):
         database = 'P:kernel\nV:6.18.65~012345abcdef-r1\nA:aarch64_cortex-a53\n\n'
         packages = installed_packages(database)
@@ -64,7 +85,8 @@ class FirmwareArtifactTests(unittest.TestCase):
                 '#!/bin/sh\nset -eu\n'
                 'case ":$PATH:" in *:./relative-bin:*|*:"/path with spaces":*) exit 70;; esac\n'
                 'test "$(git -C "$2" rev-parse HEAD)" = "$CANDIDATE_COMMIT"\n'
-                'grep -Fqx "src-git nicx_monitor file://$2^$CANDIDATE_COMMIT" "$2/sources/feeds.conf"\n'
+                'git -C "$2" diff --exit-code HEAD -- sources/feeds.conf\n'
+                'grep -Eq "^src-git nicx_monitor https://github[.]com/NICxKMS/openwrt-router-monitor[.]git\\^[0-9a-f]{40}$" "$2/sources/feeds.conf"\n'
                 'printf "source preparation stopped\\n" >&2\nexit 73\n', encoding='utf-8',
             )
             make.chmod(0o700)

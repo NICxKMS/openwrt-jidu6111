@@ -56,7 +56,7 @@ jobs:
 
   verify:
     if: inputs.operation == 'publish' && github.ref == format('refs/heads/{0}', inputs.channel) && github.sha == inputs.source_commit
-    uses: ./.github/workflows/nicx-router-monitor.yml
+    uses: ./.github/workflows/firmware-checks.yml
 
   publish:
     needs: verify
@@ -119,10 +119,3 @@ jobs:
             args+=(--consume-development "$CONSUMED")
           fi
           python3 -B scripts/release_workflow.py publish "${identity[@]}" --manifest-sha256 "$actual" "${args[@]}"
-
-  preview:
-    needs: publish
-    if: inputs.channel == 'development' && vars.NICX_DEVELOPMENT_PREVIEW_ENABLED == 'true'
-    uses: ./.github/workflows/monitor-preview.yml
-    with:
-      source_commit: ${{ inputs.source_commit }}

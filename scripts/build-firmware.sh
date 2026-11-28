@@ -92,15 +92,6 @@ git clone --quiet --shared --no-checkout "$project" "$source"
 git -C "$source" switch --quiet --detach "$commit"
 [[ -z $(git -C "$source" status --porcelain) ]] || fail 'The selected source checkout is dirty.'
 
-# Use the exact selected monitor package source, including commits awaiting upload.
-# The normal development Makefile retains its pinned remote feed for manual builds.
-awk -v source="file://$source^$commit" '
-    $2 == "nicx_monitor" { print "src-git nicx_monitor " source; found++; next }
-    { print }
-    END { if (found != 1) exit 1 }
-' "$source/sources/feeds.conf" > "$workspace/feeds.conf" || fail 'Expected one pinned Nicx Monitor feed.'
-mv -- "$workspace/feeds.conf" "$source/sources/feeds.conf"
-
 collector="$project/scripts/firmware_artifacts.py"
 openwrt="$source/openwrt"
 make -C "$source" source feeds
