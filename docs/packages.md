@@ -6,7 +6,7 @@ Use the signed APK feed linked to the image in the release manifest. For a kerne
 
 On a prepared OpenWrt tree, select the package as a module with `make menuconfig`. Run `make package PACKAGE=name` and `make package-index`. Reuse the same profile's configured tree and toolchain. For a cold environment use a compatible OpenWrt SDK when the recipe or compiled dependencies need the toolchain. Use source, configuration, toolchain and feed pins from build information. Build a local SDK with OpenWrt's `CONFIG_SDK` option when needed. Verify SDK source and checksum before use. [OpenWrt build system and SDK](https://openwrt.org/docs/guide-developer/toolchain/start)
 
-The baseline `nicx-telemetry` and `luci-app-nicx-telemetry` recipes from the pinned external feed package architecture-independent scripts and LuCI resources. They still need the installed userspace dependencies, compatible LuCI and pinned build tools such as the LuCI minifier. For a prepared firmware build tree:
+The baseline `nicx-telemetry` and `luci-app-nicx-telemetry` recipes from the pinned external feed package scripts and LuCI resources. The verified artifacts have different APK architecture metadata: telemetry 1.0.0-r9 uses `aarch64_cortex-a53` and LuCI 1.0.0-r5 uses `noarch`. Neither APK declared a kernel dependency. Both still need compatible installed dependencies. The LuCI recipe needs the host minifier. For a prepared firmware build tree:
 
 ```sh
 make package PACKAGE=nicx-telemetry
