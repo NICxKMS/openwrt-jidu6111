@@ -51,3 +51,7 @@ If a step fails, reconcile actual router, Worker and database state with the ope
 Use `make cleanup` to preview abandoned owned build directories and `make cleanup APPLY=1` to remove them. Active directory locks protect running builds. The command covers marked release-build workspaces. Inspect historical worktrees, old package bundles and signing files separately before any cleanup. Run `make storage-report` for local storage and add `REMOTE=1` to include GitHub release and Actions cache usage. GitHub-hosted jobs use disposable dependencies. After the new workflows land, remove obsolete repository caches and compare GitHub totals before and after.
 
 Verify the legacy replacement on the physical router before requesting retirement of the old artifact branch and beta tag. Keep raw legacy feed URLs usable during that transition.
+
+## Cloudflare Development Preview
+
+The [standalone monitor repository](https://github.com/NICxKMS/openwrt-router-monitor/blob/main/docs/migration-provenance.md) owns the native Cloudflare Development Preview and its separate Supabase test project. Run the Preview workflow there from its protected `main` branch. Firmware releases and pinned package feed updates do not refresh the dashboard or API.
