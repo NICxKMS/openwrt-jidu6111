@@ -54,4 +54,4 @@ Verify the legacy replacement on the physical router before requesting retiremen
 
 ## Cloudflare Development Preview
 
-The [standalone monitor repository](https://github.com/NICxKMS/openwrt-router-monitor/blob/main/docs/migration-provenance.md#cloudflare-development-preview) owns the native Cloudflare Development Preview and its separate Supabase test project. Run the Preview workflow there from its protected `main` branch. Firmware releases and pinned package feed updates do not refresh the dashboard or API.
+The [standalone monitor repository](https://github.com/NICxKMS/openwrt-router-monitor/blob/main/docs/migration-provenance.md) owns the native Cloudflare Development Preview and its separate Supabase test project. Run the Preview workflow there from its protected `main` branch. Firmware releases and pinned package feed updates do not refresh the dashboard or API.
